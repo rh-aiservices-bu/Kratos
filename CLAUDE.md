@@ -184,12 +184,13 @@ cleanup: automatic
 | `stress_test` | provision_api_key → send_requests (N concurrent) → [cleanup: delete key] | Configurable assertions on error rate, latency, throughput |
 | `key_provisioning` | [provision_api_key → send_requests (1 probe)] × N → [cleanup: delete all N keys] | All keys accumulate before cleanup — intentional |
 | `metrics_fill` | provision_api_key → send_requests (burst) → check_metrics → [cleanup: delete key] | `check_metrics` is a stub — metrics endpoint TBD |
+| `slo_probe` | provision_api_key → loop(send_requests at increasing concurrency) until assertions fail → [cleanup: delete key] | Finds the concurrency ceiling before SLOs are breached; assertions define the pass/fail thresholds (e.g. `p99_latency_ms`, `error_rate_pct`) |
 
 **Design note**: Tasks are kept atomic and composable so future scenarios can reuse just `provision_api_key`, just `send_requests`, etc.
 
 ## Future Features / Scenario Ideas
 
-- **Historic metadata testing**: Pre-populate metrics store with backdated requests to simulate a year of data. Needs research into Prometheus remote-write or MaaS-specific APIs.
+- **Historic metadata testing**: Pre-populate metrics store with backdated requests to simulate a year of data. Needs research into Prometheus remote-write or MaaS-specific APIs. **Requires cluster admin** — writing backdated data directly to the metrics store is not possible with rhoai-admin alone.
 - **Internal service targeting**: Send inference directly to in-cluster Service URL (bypasses MaaS gateway — more akin to raw model stress testing).
 - **Per-user auth**: Inherit the permissions of the UI user (OIDC token passthrough) instead of always using the SA token.
 - **Scenario config in UI**: Let users tweak per-scenario params (request count, concurrency) from the browser without editing YAML.
