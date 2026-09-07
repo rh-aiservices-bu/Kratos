@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document breaks the Kratos project into discrete, ordered phases. Each phase has a clear scope, a set of deliverables, and a milestone that marks completion. Phases are sized to be independently shippable — each one leaves the project in a working (if incomplete) state.
+This document breaks the Kratos project into discrete, ordered phases. Each phase has a clear scope, a set of deliverables, and a **Verification** section — the exact commands or steps that confirm the phase milestone is met before moving on.
 
 Cross-cutting concerns (documentation, CI, deployment manifests) are given their own phases rather than being treated as afterthoughts bolted onto feature phases.
 
@@ -18,7 +18,7 @@ Cross-cutting concerns (documentation, CI, deployment manifests) are given their
 | 3 | Scenario YAMLs | All five scenario definitions | Scenarios load, validate, and resolve config |
 | 4 | API Server | FastAPI backend — runs, scenarios, SSE logs | API serves scenarios and streams job logs |
 | 5 | Frontend | React + PatternFly UI with live assertion panel | Full UI works end-to-end in development |
-| 6 | Containerization & Manifests | Dockerfile, deploy manifests, Makefile | One-command deploy to an OCP cluster |
+| 6 | Containerisation & Manifests | Dockerfile, deploy manifests, Makefile | One-command deploy to an OCP cluster |
 | 7 | Integration & E2E Testing | Tests against a real RHOAI environment | All 5 scenarios pass on a live cluster |
 | 8 | CI/CD Pipeline | Full automated pipeline: lint, test, build, push | CI green on every PR and merge to main |
 | 9 | Documentation | README, guides, runbook, API reference | Docs reviewed and published |
@@ -32,16 +32,32 @@ Cross-cutting concerns (documentation, CI, deployment manifests) are given their
 ### Deliverables
 
 - `pyproject.toml` — Python dependencies declared: `fastapi`, `uvicorn`, `kubernetes`, `aiosqlite`, `httpx`, `openai`, `pytest`, `pytest-asyncio`
-- `package.json` (frontend) — React, TypeScript, PatternFly, Vite (or Webpack), ESLint, Jest
+- `ui/package.json` — React, TypeScript, PatternFly, Vite, ESLint, Jest
 - `.github/workflows/ci.yml` (skeleton) — lint + placeholder test job; triggers on PR and push to `main`
 - `Makefile` — initial targets: `lint`, `test`, `build`, `dev`
 - `.gitignore`, `pyproject.toml` `[tool.ruff]` / `[tool.mypy]` config stubs
 - `docs/architecture/adrs/` — all ADRs from design phase (already done)
-- `CLAUDE.md` — finalized design document (already done)
+- `CLAUDE.md` — finalised design document (already done)
 
-### Milestone: **Repo Foundation**
+### Verification
 
-> The repository builds cleanly, linters pass on CI, and the `make dev` target starts the FastAPI dev server (returning 404s for all routes, which is expected).
+```bash
+# Python linters pass with zero findings
+make lint
+
+# Placeholder import-smoke tests pass
+make test
+
+# FastAPI dev server starts (all routes return 404 — expected)
+uvicorn api.main:app --port 8000
+curl http://localhost:8000/nonexistent   # expect HTTP 404, not a crash
+```
+
+Post-phase checklist:
+- [ ] `make lint` completes with no warnings or errors printed
+- [ ] `make test` output shows `2 passed` (or more) with no failures
+- [ ] `uvicorn api.main:app` starts without any import errors in the terminal
+- [ ] `curl http://localhost:8000/nonexistent` returns `{"detail":"Not Found"}`, not a Python traceback
 
 ### Dependencies
 
@@ -65,9 +81,29 @@ None — this is the starting point.
 - `harness/tests/test_result.py` — unit tests: all operator types, pending detection, PASS/FAIL logic
 - `harness/tests/test_runner.py` — unit tests: task ordering, cleanup on failure, assertion state progression using stub tasks
 
-### Milestone: **Harness Core**
+### Verification
 
-> `python -m harness.main --scenario <stub_scenario> --run-id test-001` runs against a stub scenario YAML, executes stub tasks, emits assertion state after each, runs cleanup, and writes a valid `RunResult` JSON. All unit tests pass.
+```bash
+# All new unit tests pass
+make test
+
+# Entrypoint runs a stub scenario end-to-end and writes a result file
+python -m harness.main --scenario scenarios/stub.yaml --run-id test-001
+cat /data/results/test-001.json   # valid RunResult JSON with status PASS or FAIL
+
+# Cleanup runs even when a task fails (check runner logs for "cleanup" messages)
+python -m harness.main --scenario scenarios/stub_failing.yaml --run-id test-002
+# expect: logs show cleanup ran, result JSON status is FAIL
+```
+
+> `stub.yaml` and `stub_failing.yaml` are minimal two-task scenarios added alongside the unit tests for this phase only.
+
+Post-phase checklist:
+- [ ] `make test` output shows all new test files (`test_config`, `test_result`, `test_runner`) listed and passing
+- [ ] Running the stub scenario prints each task name to stdout in order, then a cleanup line
+- [ ] `cat /data/results/test-001.json` shows a JSON object with `status`, `run_id`, `tasks`, and `assertions` fields
+- [ ] Running the failing stub (`test-002`) still prints cleanup lines — cleanup must run regardless of failure
+- [ ] `cat /data/results/test-002.json` shows `"status": "FAIL"` but the file exists (harness did not crash)
 
 ### Dependencies
 
@@ -92,21 +128,44 @@ None — this is the starting point.
   - `cleanup()`: no-op
 
 - `harness/tasks/metrics.py` — `CheckMaasMetricsTask`
-  - `run()`: reads RHOAI/MaaS metrics endpoint; stores raw values in `shared_state["metrics"]`; always prints a formatted summary to stdout (appears in pod logs / SSE stream). Initial metrics: `total_requests`, `total_tokens`. Endpoint TBD — implement as a configurable stub that returns zeroes until the real endpoint is known.
-  - `cleanup()`: no-op (metrics pipeline data is not cleaned up)
+  - `run()`: reads RHOAI/MaaS metrics endpoint; stores raw values in `shared_state["metrics"]`; always prints a formatted summary to stdout. Initial metrics: `total_requests`, `total_tokens`. Implemented as a configurable stub returning zeroes until the real endpoint is known.
+  - `cleanup()`: no-op
 
 - `harness/tasks/subscription.py` — `ApplyRateLimitSubscriptionTask`
   - `run()`: reads existing `MaaSSubscription` CR (if any) into `shared_state["original_subscription"]`; creates or patches CR with configured `rps_limit` via `kubernetes.client.CustomObjectsApi`
   - `cleanup()`: restores original CR state, or deletes the CR if it was created from scratch
 
-- `harness/tests/test_auth.py` — mocked `httpx` responses for key creation and bulk-revoke
-- `harness/tests/test_inference.py` — mocked OpenAI client; asserts rolling metrics update after each request; asserts debounce behaviour; asserts key pool distribution
-- `harness/tests/test_metrics.py` — mocked metrics endpoint; asserts summary is printed; asserts `shared_state["metrics"]` populated
-- `harness/tests/test_subscription.py` — mocked `CustomObjectsApi`; asserts original state saved; asserts cleanup restores state
+- Unit tests: `test_auth.py`, `test_inference.py`, `test_metrics.py`, `test_subscription.py`
 
-### Milestone: **Task Implementations**
+### Verification
 
-> All four task classes have unit tests passing with mocked HTTP and Kubernetes clients. Each task can be instantiated and run independently in isolation.
+```bash
+# All task unit tests pass (mocked HTTP + mocked K8s client)
+make test
+
+# Each task class imports and instantiates without error
+python -c "
+from harness.tasks.auth import ProvisionApiKeyTask
+from harness.tasks.inference import SendRequestsTask
+from harness.tasks.metrics import CheckMaasMetricsTask
+from harness.tasks.subscription import ApplyRateLimitSubscriptionTask
+print('all task imports OK')
+"
+
+# Registry resolves all four task names
+python -c "
+from harness.tasks.registry import REGISTRY
+for name in ('provision_api_key', 'send_requests', 'check_maas_metrics', 'apply_rate_limit_subscription'):
+    assert name in REGISTRY, f'missing: {name}'
+print('registry OK')
+"
+```
+
+Post-phase checklist:
+- [ ] `make test` lists all four task test files by name and all pass
+- [ ] The import one-liner prints `all task imports OK` with no tracebacks
+- [ ] The registry check prints `registry OK` with no `AssertionError`
+- [ ] `test_inference.py` output explicitly mentions debounce and key-pool distribution test cases passing
 
 ### Dependencies
 
@@ -131,11 +190,36 @@ Each YAML must:
 - Pass schema validation (JSON Schema or Pydantic model in `harness/config.py`)
 - Resolve all `${config.<key>}` references without error when loaded by `harness/config.py`
 
-- `harness/tests/test_scenarios.py` — parametrized test: load each scenario YAML, validate schema, resolve config, assert all task names exist in registry
+- `harness/tests/test_scenarios.py` — parametrised test: load each scenario YAML, validate schema, resolve config, assert all task names exist in registry
 
-### Milestone: **Scenario YAMLs**
+### Verification
 
-> All five scenarios load without error, pass schema validation, and all task references resolve against the registry.
+```bash
+# Schema validation + registry resolution for every scenario
+make test   # test_scenarios.py covers all five
+
+# Manual spot-check: load a scenario and print its resolved config
+python -c "
+from harness.config import load_scenario
+s = load_scenario('scenarios/single_key_load.yaml')
+import json; print(json.dumps(s, indent=2))
+"
+# expect: all \${config.*} references resolved, no KeyError
+
+# Confirm all five scenarios are present and named correctly
+python -c "
+import pathlib, yaml
+for f in pathlib.Path('scenarios').glob('*.yaml'):
+    s = yaml.safe_load(f.read_text())
+    print(f.name, '->', s['name'])
+"
+```
+
+Post-phase checklist:
+- [ ] `make test` output lists `test_scenarios.py` with all five scenario names visible in the test IDs (parametrised)
+- [ ] The `load_scenario` one-liner prints valid JSON with no `${...}` placeholders remaining anywhere in the output
+- [ ] The scenario listing one-liner prints exactly five lines, one per YAML file
+- [ ] Each printed scenario `name` matches the filename (e.g. `single_key_load.yaml` → `name: single_key_load`)
 
 ### Dependencies
 
@@ -151,21 +235,47 @@ Each YAML must:
 ### Deliverables
 
 - `api/db.py` — `aiosqlite` setup; schema migrations for `runs` and `task_results` tables; `init_db()` called at startup
-- `api/k8s.py`
-  - `create_job(scenario, run_id)` — builds and submits a K8s Job manifest referencing the harness image and passing `--scenario` / `--run-id` args
-  - `stream_pod_logs(run_id)` — async generator: waits for pod readiness, attaches to log stream, yields lines
-- `api/routes/scenarios.py` — `GET /api/scenarios`: reads all YAML files from the scenarios ConfigMap mount; returns name, description, default config per scenario
-- `api/routes/runs.py`
-  - `POST /api/runs`: creates Job, writes run record to SQLite, returns run ID
-  - `GET /api/runs`: returns paginated run history from SQLite
-  - `GET /api/runs/{id}`: returns single run record including task results and assertion outcomes
-- `api/routes/logs.py` — `GET /api/runs/{id}/logs`: SSE endpoint; wraps `k8s.stream_pod_logs()` in a `StreamingResponse`; emits both raw log lines and structured assertion state events
-- `api/main.py` — FastAPI app; mounts routes; mounts `ui/dist/` as static files; calls `init_db()` on startup
-- `api/tests/test_routes.py` — integration tests with mocked Kubernetes client and in-memory SQLite
+- `api/k8s.py` — `create_job(scenario, run_id)` and `stream_pod_logs(run_id)` async generator
+- `api/routes/scenarios.py` — `GET /api/scenarios`
+- `api/routes/runs.py` — `POST /api/runs`, `GET /api/runs`, `GET /api/runs/{id}`
+- `api/routes/logs.py` — `GET /api/runs/{id}/logs` (SSE)
+- `api/main.py` — FastAPI app with all routes and `init_db()` on startup
+- `api/tests/test_routes.py` — integration tests with mocked K8s client and in-memory SQLite
 
-### Milestone: **API Server**
+### Verification
 
-> `uvicorn api.main:app --reload` starts cleanly. `GET /api/scenarios` returns all five scenarios. `POST /api/runs` creates a Job (verified against mocked K8s client). `GET /api/runs/{id}/logs` streams log lines via SSE. All route tests pass.
+```bash
+# Route integration tests pass
+make test
+
+# Start the API server
+uvicorn api.main:app --reload --port 8000
+
+# Scenario list
+curl -s http://localhost:8000/api/scenarios | python3 -m json.tool
+# expect: JSON array with 5 entries, each with name + description
+
+# Create a run (K8s job creation will fail locally — expect a 500 or mocked response)
+curl -s -X POST http://localhost:8000/api/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"scenario": "single_key_load"}' | python3 -m json.tool
+# expect: JSON with run_id field
+
+# List runs
+curl -s http://localhost:8000/api/runs | python3 -m json.tool
+# expect: JSON array (may be empty or contain the just-created run)
+
+# SSE log stream (connect and wait a few seconds — Ctrl-C to stop)
+curl -N http://localhost:8000/api/runs/<run-id>/logs
+# expect: SSE event stream (data: ... lines)
+```
+
+Post-phase checklist:
+- [ ] `make test` passes including the new `test_routes.py` file
+- [ ] `curl /api/scenarios` returns a JSON array with exactly 5 objects; each has `name` and `description`
+- [ ] `curl -X POST /api/runs` returns a JSON object containing a `run_id` (UUID-shaped string)
+- [ ] `curl /api/runs` returns a JSON array containing the run just created
+- [ ] `curl -N /api/runs/<run-id>/logs` prints `data:` lines to the terminal (SSE stream opens without error)
 
 ### Dependencies
 
@@ -181,17 +291,32 @@ Each YAML must:
 
 - `ui/` — Vite project scaffold with TypeScript, PatternFly, ESLint, Jest configured
 - `ui/src/api/client.ts` — typed fetch wrappers for all backend API routes
-- `ui/src/components/ScenarioList.tsx` — PatternFly `DataList` or `Gallery` of available scenarios with name, description, and a "Run" button per scenario
-- `ui/src/components/RunTrigger.tsx` — modal or panel to confirm and start a run; accepts the scenario name
-- `ui/src/components/LogStream.tsx` — `EventSource` consumer; renders log lines in a scrolling `CodeBlock`; auto-scrolls to bottom; reconnects on drop
-- `ui/src/components/AssertionPanel.tsx` — live assertion status panel; parses structured assertion SSE events; renders each assertion as Passing / Failing / Pending with PatternFly status icons; updates after every SSE event
-- `ui/src/components/RunHistory.tsx` — PatternFly `Table` of past runs with scenario name, status, timestamps, and a link to view logs
-- `ui/src/App.tsx` — top-level layout: nav, scenario list, run history tabs
+- `ui/src/components/ScenarioList.tsx` — PatternFly list of available scenarios with a "Run" button
+- `ui/src/components/RunTrigger.tsx` — modal to confirm and start a run
+- `ui/src/components/LogStream.tsx` — `EventSource` consumer; scrolling `CodeBlock`; auto-reconnects
+- `ui/src/components/AssertionPanel.tsx` — live assertion status; renders Passing / Failing / Pending per assertion
+- `ui/src/components/RunHistory.tsx` — PatternFly `Table` of past runs
+- `ui/src/App.tsx` — top-level layout
 - `ui/src/tests/` — Jest + React Testing Library unit tests for each component
 
-### Milestone: **Frontend**
+### Verification
 
-> `make dev` starts both the FastAPI server and the Vite dev server. Navigating to the UI shows the scenario list, triggering a run streams live logs and updates the assertion panel in real-time, and the run history table reflects completed runs.
+```bash
+# Component unit tests pass
+make test
+
+# Start both servers
+make dev
+# open http://localhost:5173 in a browser
+```
+
+Manual browser checks:
+- [ ] Scenario list renders all 5 scenarios with a "Run" button each
+- [ ] Clicking "Run" opens a confirmation modal; confirming starts the run
+- [ ] Log stream panel appears and scrolls as log lines arrive via SSE
+- [ ] Assertion panel shows Pending → Passing/Failing transitions in real time
+- [ ] Completed run appears in the Run History table with correct status and timestamps
+- [ ] Navigating away and back does not lose run history
 
 ### Dependencies
 
@@ -199,7 +324,7 @@ Each YAML must:
 
 ---
 
-## Phase 6 — Containerization & Deploy Manifests
+## Phase 6 — Containerisation & Deploy Manifests
 
 **Goal**: package the project as a single container image and write all OpenShift manifests needed for a production deployment.
 
@@ -207,31 +332,43 @@ Each YAML must:
 
 **Dockerfile** (multi-stage):
 1. `node-builder` stage — installs npm deps, runs `npm run build`, outputs `ui/dist/`
-2. `python-builder` stage (optional) — installs Python deps into a virtualenv
-3. Final stage — copies virtualenv + `ui/dist/` + Python source; sets default CMD to `uvicorn api.main:app`
+2. Final stage — copies `ui/dist/` + Python source; default CMD is `uvicorn api.main:app`
 
-**Deploy manifests** (`deploy/`):
-- `serviceaccount.yaml` — `kratos-runner` SA
-- `rbac.yaml` — Role with `jobs`, `pods`, `pods/log` permissions + `maassubscriptions` CRD permissions; ClusterRoleBinding for `rhoai-admin`
-- `pvc.yaml` — PVC for `/data` (SQLite + results); `ReadWriteMany` storage class noted
-- `configmap-global.yaml` — `MAAS_API_URL`, `DEFAULT_MODEL`, `DEFAULT_SUBSCRIPTION`
-- `configmap-scenarios.yaml` — all five scenario YAMLs embedded
-- `deployment.yaml` — API server Deployment; mounts PVC and both ConfigMaps; resource limits set
-- `service.yaml` — ClusterIP Service on port 8000
-- `route.yaml` — OpenShift Route with TLS edge termination
-- `kustomization.yaml` — ties all manifests together for `oc apply -k deploy/`
+**Deploy manifests** (`deploy/`): `serviceaccount.yaml`, `rbac.yaml`, `pvc.yaml`, `configmap-global.yaml`, `configmap-scenarios.yaml`, `deployment.yaml`, `service.yaml`, `route.yaml`, `kustomization.yaml`
 
-**Makefile** — finalized targets:
-- `make build` — Docker build
-- `make push` — push to registry
-- `make deploy` — `oc apply -k deploy/`
-- `make dev` — local dev servers (FastAPI + Vite)
-- `make test` — run Python and JS test suites
-- `make lint` — ruff + mypy + eslint
+**Makefile** — finalised targets: `build`, `push`, `deploy`, `dev`, `test`, `lint`
 
-### Milestone: **Deployable**
+### Verification
 
-> `make build && make push && make deploy` deploys Kratos to an OCP cluster. The Route is accessible, the scenario list loads, and a run can be triggered from the UI and completes successfully.
+```bash
+# Image builds without error
+make build
+docker images | grep kratos   # image present
+
+# Image starts as API server
+docker run --rm -p 8000:8000 quay.io/wparker/kratos:latest
+curl http://localhost:8000/api/scenarios   # returns scenario list from embedded ConfigMap
+
+# Image starts as harness job entrypoint (expect a config error — no cluster available)
+docker run --rm quay.io/wparker/kratos:latest \
+  python -m harness.main --scenario single_key_load --run-id smoke-001
+# expect: startup log lines then a config/connection error (not an import crash)
+
+# Deploy to cluster
+make push
+make deploy
+oc get pods -n kratos   # API server pod Running
+oc get route -n kratos  # Route present with host
+
+# Open Route URL in browser — UI loads and scenario list appears
+```
+
+Post-phase checklist:
+- [ ] `make build` completes with no errors; `docker images | grep kratos` shows the image
+- [ ] `docker run --rm -p 8000:8000 quay.io/wparker/kratos:latest` starts and `curl http://localhost:8000/api/scenarios` returns the scenario list (not a 404 or crash)
+- [ ] Running the harness entrypoint inside Docker prints startup log lines before failing on the missing cluster — no `ImportError` or `ModuleNotFoundError`
+- [ ] `oc get pods -n kratos` shows the API server pod in `Running` state (not `CrashLoopBackOff`)
+- [ ] Opening the Route URL in a browser loads the Kratos UI and the scenario list is visible
 
 ### Dependencies
 
@@ -239,30 +376,33 @@ Each YAML must:
 
 ---
 
-## Phase 7 — Integration & End-to-End Testing
+## Phase 7 — Integration & E2E Testing
 
 **Goal**: validate all five scenarios against a real RHOAI/MaaS environment.
 
 ### Deliverables
 
-- `harness/tests/integration/` — integration test suite; requires real cluster env vars; skipped in unit test CI job
-  - `test_single_key_load.py` — triggers scenario, polls for completion, asserts PASS and no leftover `kratos-*` API keys
-  - `test_multi_key_load.py` — same; asserts all N keys created and all N keys revoked
-  - `test_direct_inference.py` — same; asserts no API keys created or revoked
-  - `test_rate_limit_validation.py` — same; asserts `MaaSSubscription` CR restored to original state
-  - `test_metrics_fill.py` — same; asserts `total_requests` and `total_tokens` in `shared_state["metrics"]` are non-zero
-- End-to-end checklist (manual):
-  - [ ] Open Route URL in browser
-  - [ ] Trigger each of the 5 scenarios
-  - [ ] Confirm live logs appear during run
-  - [ ] Confirm assertion panel updates in real-time
-  - [ ] Confirm run appears in history after completion
-  - [ ] Confirm no leftover `kratos-*` MaaS API keys after run
-  - [ ] Confirm `MaaSSubscription` CR state restored after `rate_limit_validation`
+- `harness/tests/integration/` — integration test suite (skipped in unit test CI; requires real cluster env vars)
+  - `test_single_key_load.py`, `test_multi_key_load.py`, `test_direct_inference.py`, `test_rate_limit_validation.py`, `test_metrics_fill.py`
 
-### Milestone: **E2E Validated**
+### Verification
 
-> All five scenarios complete with PASS status on a live RHOAI cluster. No test artifacts remain after any run. Manual checklist signed off.
+```bash
+# Run integration tests against a live cluster (requires env vars set)
+MAAS_API_URL=https://maas.<cluster-domain> \
+  pytest harness/tests/integration/ -v
+# expect: all 5 tests pass
+```
+
+Manual E2E checklist (browser):
+- [ ] Open Route URL; UI loads
+- [ ] Trigger `single_key_load` — live logs appear, assertion panel updates, run ends PASS
+- [ ] Trigger `multi_key_load` — all N keys created; all N keys revoked after run
+- [ ] Trigger `direct_inference` — no MaaS API keys created or revoked
+- [ ] Trigger `rate_limit_validation` — `MaaSSubscription` CR restored to original state after run
+- [ ] Trigger `metrics_fill` — `total_requests` and `total_tokens` non-zero in logs
+- [ ] After every run: confirm no `kratos-*` MaaS API keys remain (`GET /maas-api/v1/api-keys/search`)
+- [ ] All completed runs visible in Run History with correct PASS/FAIL status
 
 ### Dependencies
 
@@ -276,20 +416,30 @@ Each YAML must:
 
 ### Deliverables
 
-- `.github/workflows/ci.yml` — triggered on PRs and pushes to `main`:
-  - `lint` job — ruff, mypy, eslint
-  - `unit-test` job — `pytest harness/tests/` (excluding `integration/`) + Jest
-  - `build` job — Docker build (no push on PRs); depends on lint + unit-test
-- `.github/workflows/release.yml` — triggered on version tags (`v*`):
-  - Builds and pushes image tagged with git SHA and semver tag
-  - Updates `deploy/deployment.yaml` image tag and commits back (or emits an artifact)
-- Image registry configuration — documented in `docs/project/registry-setup.md`
-- Branch protection rules — documented: `main` requires CI green + 1 review before merge
-- `.github/workflows/integration.yml` (optional) — manual-trigger workflow for integration tests against a real cluster; requires cluster kubeconfig secret
+- `.github/workflows/ci.yml` — lint → unit tests → Docker build; triggers on PR and push to `main`
+- `.github/workflows/release.yml` — builds and pushes image on version tags (`v*`)
+- Branch protection rules documented
 
-### Milestone: **CI Green**
+### Verification
 
-> Every PR triggers lint + unit tests + build. Merging to `main` succeeds only when all checks pass. Tagging a release automatically builds and pushes the versioned image.
+```bash
+# Open a PR with a trivial change (e.g. update a comment)
+# observe: lint, test, and build jobs all go green in GitHub Actions
+
+# Merge to main
+# observe: same 3 jobs green on the merge commit
+
+# Create a version tag
+git tag v0.1.0 && git push origin v0.1.0
+# observe: release workflow runs; image pushed with both :v0.1.0 and :<git-sha> tags
+docker pull quay.io/wparker/kratos:v0.1.0
+```
+
+Post-phase checklist:
+- [ ] Open a PR with a trivial change; all three jobs (lint, test, build) show green ticks in the GitHub Actions tab
+- [ ] A PR with a deliberate lint error (e.g. unused import) causes the lint job to fail and block merge
+- [ ] Merging to `main` triggers the same three jobs and they pass on the merge commit
+- [ ] Pushing `v0.1.0` tag triggers the release workflow; `docker pull quay.io/wparker/kratos:v0.1.0` succeeds after it completes
 
 ### Dependencies
 
@@ -303,19 +453,22 @@ Each YAML must:
 
 ### Deliverables
 
-- `README.md` — project overview, architecture diagram, quickstart (deploy + first run), links to detailed docs
-- `docs/project/implementation-plan.md` — this document (already done)
-- `docs/architecture/adrs/` — all ADRs (already done)
-- `docs/guides/quickstart.md` — step-by-step: prerequisites, `make deploy`, verify the Route, trigger a scenario, read results
-- `docs/guides/scenario-authoring.md` — how to write a new scenario YAML: format reference, available tasks and their params, assertion syntax, config interpolation, adding a scenario to the ConfigMap
-- `docs/guides/task-development.md` — how to add a new task class: implementing the `Task` ABC, registering in `registry.py`, writing unit tests with mocked HTTP, adding `emit_assertion_state()` calls
-- `docs/guides/troubleshooting.md` — common failure modes: pod scheduling delays, PVC not bound, MaaS API auth failures, leftover resources, SSE disconnects
-- `docs/reference/api.md` — FastAPI OpenAPI spec (auto-generated; link to `/docs` on the running server) + human-readable summary of each endpoint
-- `docs/reference/scenario-schema.md` — full YAML schema reference with all fields, types, defaults, and examples
+- `README.md` — project overview, architecture diagram, quickstart, links to detailed docs
+- `docs/guides/quickstart.md` — step-by-step: prerequisites, `make deploy`, verify the Route, trigger a scenario
+- `docs/guides/scenario-authoring.md` — format reference, available tasks, assertion syntax, config interpolation
+- `docs/guides/task-development.md` — implementing the `Task` ABC, registering in `registry.py`, writing unit tests
+- `docs/guides/troubleshooting.md` — common failure modes and remediation steps
+- `docs/reference/api.md` — human-readable summary of each API endpoint
+- `docs/reference/scenario-schema.md` — full YAML schema reference
 
-### Milestone: **Documentation Complete**
+### Verification
 
-> All docs are written, internally linked, and reviewed. A new team member can deploy Kratos, trigger a scenario, and author a new scenario using only the published documentation.
+Post-phase checklist (follow each guide cold, with no other context):
+- [ ] `README.md` — can describe what Kratos does and how to deploy it after reading only the README
+- [ ] `docs/guides/quickstart.md` — deploy to a fresh cluster and trigger the first scenario run using only the quickstart steps; no improvisation needed
+- [ ] `docs/guides/scenario-authoring.md` — write a new scenario YAML from scratch; it loads without validation errors and runs via the CLI
+- [ ] `docs/guides/task-development.md` — add a new stub task class; it appears in `REGISTRY` and a scenario can invoke it; unit test passes
+- [ ] `docs/guides/troubleshooting.md` — simulate a MaaS API auth failure and locate the fix using only the troubleshooting guide
 
 ### Dependencies
 
@@ -332,7 +485,7 @@ Phase 0 (Foundation)
                     └── Phase 3 (Scenario YAMLs)
                             └── Phase 4 (API Server)
                                     └── Phase 5 (Frontend)
-                                            └── Phase 6 (Containerization)
+                                            └── Phase 6 (Containerisation)
                                                     └── Phase 7 (E2E Testing)
                                                             ├── Phase 8 (CI/CD)
                                                             └── Phase 9 (Documentation)
@@ -342,7 +495,7 @@ Phase 0 (Foundation)
 
 ## Notes
 
-- **`check_maas_metrics` stub**: the metrics endpoint is TBD. Phase 2 implements the task as a configurable stub that returns zeroes. The real implementation is slotted for Phase 7 when a live cluster is available to determine the actual endpoint and response schema.
+- **`check_maas_metrics` stub**: the metrics endpoint is TBD. Phase 2 implements the task as a configurable stub returning zeroes. The real implementation is slotted for Phase 7 when a live cluster is available.
 - **Frontend build in Dockerfile**: the multi-stage Dockerfile in Phase 6 means the frontend must reach a buildable state (Phase 5) before the final image can be produced.
 - **Integration tests** (Phase 7) require cluster access and are excluded from the standard CI unit-test job. They run in a separate manual-trigger workflow.
-- **PVC storage class**: `ReadWriteMany` is assumed. If the target cluster only supports `ReadWriteOnce`, the API server and Job pods must be colocated on the same node, which constrains scheduling. This should be validated in Phase 6.
+- **PVC storage class**: `ReadWriteMany` is assumed. If the target cluster only supports `ReadWriteOnce`, the API server and Job pods must be colocated on the same node. Validate in Phase 6.
