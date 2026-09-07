@@ -20,7 +20,6 @@ Use a **dedicated Kubernetes Service Account** with the necessary permissions gr
 Required permissions:
 - `rhoai-admin` ClusterRole (or equivalent) — to call MaaS API and manage `MaaSSubscription` CRs
 - `create`, `get`, `list`, `watch` on `jobs` and `pods` in the harness namespace
-- `get` on `pods/log`
 
 ## Consequences
 

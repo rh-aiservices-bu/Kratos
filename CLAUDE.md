@@ -56,7 +56,7 @@ kratos/
 │       ├── base.py             # Task ABC: run(ctx) -> TaskResult, cleanup(ctx) -> None
 │       ├── auth.py             # provision_api_key  (uses SA token -> MaaS API)
 │       ├── inference.py        # send_requests: concurrent OpenAI-compat load (url/token overridable)
-│       ├── metrics.py          # check_metrics: read RHOAI/MaaS metrics, log summary, store in shared_state
+│       ├── metrics.py          # check_maas_metrics: read MaaS metrics (total_requests, total_tokens, etc.), log summary, store in shared_state
 │       ├── subscription.py     # apply_rate_limit_subscription: create/patch MaaSSubscription CR
 │       └── registry.py         # task name -> class mapping for YAML resolution
 │
@@ -150,7 +150,7 @@ tasks:
       count: "${config.request_count}"
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
-  - name: check_metrics
+  - name: check_maas_metrics
 assertions:
   error_rate_pct: "< 5"
   p99_latency_ms: "< 10000"
@@ -158,9 +158,10 @@ cleanup: automatic
 ```
 
 ### Assertions
-- Evaluated after all tasks complete
+- Evaluated continuously within tasks — after every atomic operation that produces new metric data (e.g. after every individual inference request in `send_requests`). Assertion state is streamed to the UI via SSE after each operation, not deferred to task or run completion. Emission is debounced to avoid flooding the SSE channel at high request rates.
 - Format: `metric_name: "<operator> <value>"` (operators: `<`, `>`, `<=`, `>=`, `==`)
-- Available metrics: `error_rate_pct`, `p50/p95/p99_latency_ms`, `throughput_rps`, `total_requests`, `success_count`, `fail_count`
+- Available metrics from `send_requests`: `error_rate_pct`, `p50/p95/p99_latency_ms`, `throughput_rps`, `total_requests`, `success_count`, `fail_count`
+- Available metrics from `check_maas_metrics`: `total_requests`, `total_tokens` (more TBD)
 - Run is PASS only if all assertions pass (or no assertions defined)
 
 ### Results Storage
@@ -175,6 +176,8 @@ cleanup: automatic
 - Every task's `cleanup()` runs after the full scenario regardless of pass/fail
 - Cleanup failures are logged but do not mark the run as failed
 - No per-run K8s Secrets needed — SA token is auto-mounted; MaaS API keys are created and deleted by harness tasks themselves
+- **Metrics pipeline data is not cleaned up.** The `check_maas_metrics` task is read-only; any request traces or counters written to the RHOAI metrics pipeline during a run are intentionally left in place. Cleaning up historical metrics data is deferred to future work.
+- Primary cleanup targets: MaaS API keys (bulk-revoked via `/maas-api/v1/api-keys/bulk-revoke`) and `MaaSSubscription` CRs (restored or deleted via Kubernetes API)
 
 ### SA Permissions Required
 - `rhoai-admin` cluster role (or equivalent) to call MaaS API
@@ -187,7 +190,7 @@ cleanup: automatic
 
 - **`send_requests`**: Sends concurrent OpenAI-compatible inference requests. Accepts optional `url` and `token` params to override context defaults — enables `direct_inference` without a separate task class. When `key_pool` param is set (list of api keys from `shared_state["api_keys"]`), distributes requests evenly across the pool. Records latency, error rate, and throughput into `shared_state["inference_results"]` for assertion evaluation.
 
-- **`check_metrics`**: Reads the RHOAI/MaaS metrics endpoint (TBD), stores raw values in `shared_state["metrics"]` for assertion evaluation, and always prints a formatted human-readable summary to the run log — regardless of assertion pass/fail. Used as a final validation step in all MaaS-based scenarios (1, 2, 4, 5). Not used in `direct_inference` since it bypasses MaaS.
+- **`check_maas_metrics`**: Reads the RHOAI/MaaS metrics endpoint (TBD), stores raw values in `shared_state["metrics"]` for assertion evaluation, and always prints a formatted human-readable summary to the run log — regardless of assertion pass/fail. Initial metrics validated: `total_requests` and `total_tokens` (to confirm they reflect the volume actually sent). More metrics TBD. Used as a final validation step in all MaaS-based scenarios (1, 2, 4, 5). Not used in `direct_inference` since it bypasses MaaS. Metrics pipeline data is not cleaned up — it is a read-only observation and cleanup of historical metrics data is deferred to future work.
 
 - **`apply_rate_limit_subscription`**: Uses `kubernetes.client.CustomObjectsApi` to create or patch a `MaaSSubscription` CR (`maas.opendatahub.io/v1alpha1`) with a configured `rps_limit`. Stores the original subscription state in `shared_state["original_subscription"]` for cleanup. Cleanup restores or deletes the CR as appropriate.
 
@@ -195,11 +198,11 @@ cleanup: automatic
 
 | Scenario | Tasks | Default Config | Default Assertions | Notes |
 |---|---|---|---|---|
-| `single_key_load` | provision_api_key → send_requests → check_metrics → [cleanup: delete key] | `request_count: 100`, `concurrency: 5` | `error_rate_pct: "< 5"`, `p99_latency_ms: "< 10000"` | Baseline load test — one key, N requests through MaaS. Validates inference and confirms metrics are populated. Replaces `stress_test`. |
-| `multi_key_load` | provision_api_key × N → send_requests (M reqs distributed across key pool) → check_metrics → [cleanup: bulk-revoke all N keys] | `key_count: 5`, `request_count: 5`, `concurrency: 5` | `error_rate_pct: "< 5"` | M requests distributed evenly across N keys (floor(M/N) per key, remainder to first). Default M=N so each key gets exactly 1 probe. All keys accumulate before cleanup — intentional. Replaces `key_provisioning`. |
+| `single_key_load` | provision_api_key → send_requests → check_maas_metrics → [cleanup: delete key] | `request_count: 100`, `concurrency: 5` | `error_rate_pct: "< 5"`, `p99_latency_ms: "< 10000"` | Baseline load test — one key, N requests through MaaS. Validates inference and confirms metrics are populated. Replaces `stress_test`. |
+| `multi_key_load` | provision_api_key × N → send_requests (M reqs distributed across key pool) → check_maas_metrics → [cleanup: bulk-revoke all N keys] | `key_count: 5`, `request_count: 5`, `concurrency: 5` | `error_rate_pct: "< 5"` | M requests distributed evenly across N keys (floor(M/N) per key, remainder to first). Default M=N so each key gets exactly 1 probe. All keys accumulate before cleanup — intentional. Replaces `key_provisioning`. |
 | `direct_inference` | send_requests (url=target_url, token=target_token) — no key provisioning, no cleanup | `target_url: ""` (required), `target_token: ""` (required), `request_count: 50`, `concurrency: 5` | `error_rate_pct: "< 5"` | Send inference directly to any configurable endpoint with a configurable auth token. Bypasses MaaS gateway — tests underlying model serving or compares MaaS-routed vs direct latency. |
-| `rate_limit_validation` | apply_rate_limit_subscription(rps_limit) → provision_api_key × N → send_requests → check_metrics → [cleanup: delete keys + restore/delete MaaSSubscription] | `rate_limit_rps: 10`, `request_count: 100`, `concurrency: 20`, `key_count: 1` | `throughput_rps: "<= ${config.rate_limit_rps}"`, `error_rate_pct: "< 30"` | Creates a `MaaSSubscription` CR with a configured rate limit. Fires requests and asserts observed throughput stays at or below the limit. Metrics step confirms 429s are reflected in the metrics pipeline. Some 429s are expected. |
-| `metrics_fill` | provision_api_key → send_requests → check_metrics → [cleanup: delete key] | `request_count: 200`, `concurrency: 10` | `error_rate_pct: "< 5"`, `metrics_request_count: ">= ${config.request_count * 0.95}"` | Sends a burst then reads and validates RHOAI/MaaS metrics. Confirms the metrics pipeline is populated correctly and counters are consistent with what was sent. `check_metrics` always prints a human-readable summary to logs regardless of assertion pass/fail. |
+| `rate_limit_validation` | apply_rate_limit_subscription(rps_limit) → provision_api_key × N → send_requests → check_maas_metrics → [cleanup: delete keys + restore/delete MaaSSubscription] | `rate_limit_rps: 10`, `request_count: 100`, `concurrency: 20`, `key_count: 1` | `throughput_rps: "<= ${config.rate_limit_rps}"`, `error_rate_pct: "< 30"` | Creates a `MaaSSubscription` CR with a configured rate limit. Fires requests and asserts observed throughput stays at or below the limit. Metrics step confirms 429s are reflected in the metrics pipeline. Some 429s are expected. |
+| `metrics_fill` | provision_api_key → send_requests → check_maas_metrics → [cleanup: delete key] | `request_count: 200`, `concurrency: 10` | `error_rate_pct: "< 5"`, `metrics_request_count: ">= ${config.request_count * 0.95}"` | Sends a burst then reads and validates RHOAI/MaaS metrics. Confirms the metrics pipeline is populated correctly and counters are consistent with what was sent. `check_maas_metrics` always prints a human-readable summary to logs regardless of assertion pass/fail. |
 
 **Design note**: Tasks are kept atomic and composable so future scenarios can reuse just `provision_api_key`, just `send_requests`, etc.
 

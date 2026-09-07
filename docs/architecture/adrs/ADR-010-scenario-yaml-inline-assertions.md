@@ -23,11 +23,11 @@ assertions:
 
 Supported operators: `<`, `>`, `<=`, `>=`, `==`.
 
-The `ScenarioRunner` evaluates all assertions after all tasks complete. The run is `PASS` only if every assertion passes (or no assertions are defined). Assertion values may reference scenario config params via interpolation (e.g. `"<= ${config.rate_limit_rps}"`).
+Assertions are evaluated **continuously within tasks** — after every atomic operation that produces new metric data (e.g. after every individual inference request in `send_requests`). Tasks emit assertion state updates via SSE after each operation. This means the operator sees assertion outcomes updating live as requests are fired, not only at task or run completion. See ADR-013 for the full decision on evaluation granularity and SSE emission debouncing. The final PASS/FAIL verdict is determined after all tasks have completed and the last assertion evaluation has run. Assertion values may reference scenario config params via interpolation (e.g. `"<= ${config.rate_limit_rps}"`).
 
 Available metrics for assertion (populated by task execution):
 - From `send_requests` → `shared_state["inference_results"]`: `error_rate_pct`, `p50_latency_ms`, `p95_latency_ms`, `p99_latency_ms`, `throughput_rps`, `total_requests`, `success_count`, `fail_count`
-- From `check_metrics` → `shared_state["metrics"]`: `metrics_request_count` (and others TBD once the metrics endpoint is finalized)
+- From `check_maas_metrics` → `shared_state["metrics"]`: `metrics_request_count` (and others TBD once the metrics endpoint is finalized)
 
 ## Consequences
 

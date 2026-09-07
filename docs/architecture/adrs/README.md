@@ -24,5 +24,6 @@ Each ADR follows the [Michael Nygard format](https://cognitect.com/blog/2011/11/
 | [ADR-008](ADR-008-service-account-token-auth.md) | Service Account Token for MaaS API Authentication | Accepted |
 | [ADR-009](ADR-009-maas-subscription-via-crd.md) | MaaSSubscription Rate Limits via Kubernetes CRD | Accepted |
 | [ADR-010](ADR-010-scenario-yaml-inline-assertions.md) | Scenario YAML with Inline Assertions | Accepted |
-| [ADR-011](ADR-011-vanilla-js-frontend.md) | Vanilla JS Frontend (No Framework) | Accepted |
+| [ADR-011](ADR-011-react-patternfly-frontend.md) | React + TypeScript + PatternFly Frontend | Accepted |
 | [ADR-012](ADR-012-send-requests-overridable-url-token.md) | send_requests with Overridable URL and Token (Enabling Direct Inference) | Accepted |
+| [ADR-013](ADR-013-realtime-assertion-evaluation.md) | Real-time Assertion Evaluation During Run Execution | Accepted |

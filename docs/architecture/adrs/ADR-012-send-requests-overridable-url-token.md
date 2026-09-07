@@ -18,20 +18,25 @@ Options considered:
 
 ## Decision
 
-Extend **`send_requests`** with optional `url` and `token` params that, when provided, override the `TaskContext` defaults:
+Extend **`send_requests`** with optional `url` and `token` params resolved via a **three-level priority chain**:
 
-```yaml
-- name: send_requests
-  params:
-    url: "${config.target_url}"
-    token: "${config.target_token}"
-    count: "${config.request_count}"
-    concurrency: "${config.concurrency}"
-```
+1. **Explicit YAML `params:`** — highest priority. Specified directly in the scenario's task params, typically referencing a config value:
+   ```yaml
+   - name: send_requests
+     params:
+       url: "${config.target_url}"
+       token: "${config.target_token}"
+       count: "${config.request_count}"
+       concurrency: "${config.concurrency}"
+   ```
 
-When `url` is omitted, the task resolves the endpoint from the MaaS model discovery API (`GET /v1/models`) as usual. When `token` is omitted, the SA token from `TaskContext` is used. Both must be supplied together for the direct inference case.
+2. **Inherited from `shared_state`** — if no explicit `url`/`token` param is given, `send_requests` checks `shared_state` for values set by a prior task (e.g. a future task that resolves an endpoint and stores it in `shared_state["target_url"]`).
 
-The `direct_inference` scenario uses this mechanism and skips `provision_api_key` entirely — there is no key provisioning and no cleanup.
+3. **`TaskContext` defaults** — lowest priority. Falls back to the MaaS model discovery endpoint (`GET /v1/models`) for the URL, and the auto-mounted SA token for auth.
+
+For the `direct_inference` scenario, `target_url` and `target_token` are declared in the scenario YAML `config:` section and referenced via `${config.target_url}` / `${config.target_token}`. This is the explicit-YAML path (level 1).
+
+The `direct_inference` scenario skips `provision_api_key` entirely — there is no key provisioning and no cleanup.
 
 ## Consequences
 
@@ -45,5 +50,5 @@ The `direct_inference` scenario uses this mechanism and skips `provision_api_key
 - `target_url` and `target_token` have no default values in `direct_inference` and are marked required; the harness config loader should validate their presence before the task runs and fail fast with a descriptive error.
 
 **Neutral:**
-- `direct_inference` does not call `check_metrics` because it bypasses MaaS — there are no MaaS-side metrics to validate for a direct inference call.
+- `direct_inference` does not call `check_maas_metrics` because it bypasses MaaS — there are no MaaS-side metrics to validate for a direct inference call.
 - The overridable params do not affect any existing scenario; MaaS-based scenarios continue to work exactly as before.

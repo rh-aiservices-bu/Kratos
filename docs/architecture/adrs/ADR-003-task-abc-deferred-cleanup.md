@@ -37,6 +37,7 @@ Cleanup is **deferred**: the `ScenarioRunner` calls `run()` on all tasks in orde
 **Negative:**
 - Resources created early in a scenario persist through all subsequent tasks, including potentially slow ones (e.g. a large inference burst). This is intentional but means test artifacts live longer than with per-task cleanup.
 - A cleanup failure is silent at the pass/fail level; operators must check logs to discover leaked resources.
+- **Metrics pipeline data is intentionally not cleaned up.** Inference requests leave traces in the RHOAI metrics pipeline; these are read-only observations and cleaning up historical metrics is deferred to future work. Primary cleanup targets are API keys and `MaaSSubscription` CRs.
 
 **Neutral:**
 - `TaskContext.shared_state` is available during cleanup so tasks can find the IDs of resources they created (e.g. `shared_state["api_keys"]` for bulk revocation, `shared_state["original_subscription"]` for restoring CRD state).
