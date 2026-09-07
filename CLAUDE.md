@@ -9,9 +9,10 @@ Tests are composed of atomic **tasks** (e.g., provision API key, send inference 
 ## Architecture Overview
 
 ```
-                  Browser UI (HTML/JS)
+                  Browser UI (React + TypeScript + PatternFly)
                   - Pick scenario, start run
                   - Live log streaming (SSE)
+                  - Live assertion status panel
                   - Results history
                           |
                   FastAPI Backend (Deployment)
@@ -77,24 +78,38 @@ kratos/
 │       ├── runs.py             # POST /api/runs, GET /api/runs, GET /api/runs/{id}
 │       └── logs.py             # GET /api/runs/{id}/logs  (SSE, streams pod logs)
 │
-├── ui/                         # Frontend (static files served by FastAPI)
-│   ├── index.html
-│   ├── app.js                  # Vanilla JS: scenario list, run trigger, SSE logs
-│   └── styles.css
+├── ui/                         # Frontend (React + TypeScript + PatternFly; built to ui/dist/)
+│   ├── src/
+│   │   ├── App.tsx             # Top-level layout: nav, scenario list, run history tabs
+│   │   ├── api/client.ts       # Typed fetch wrappers for all backend API routes
+│   │   └── components/
+│   │       ├── ScenarioList.tsx    # PatternFly list of scenarios with Run button
+│   │       ├── RunTrigger.tsx      # Confirm + start a run
+│   │       ├── LogStream.tsx       # EventSource consumer, scrolling CodeBlock
+│   │       ├── AssertionPanel.tsx  # Live assertion status (Passing/Failing/Pending)
+│   │       └── RunHistory.tsx      # PatternFly Table of past runs
+│   ├── package.json
+│   └── tsconfig.json
 │
 ├── deploy/                     # OpenShift/K8s manifests
-│   ├── serviceaccount.yaml     # SA with rhoai-admin + job/pod RBAC
+│   ├── serviceaccount.yaml     # SA with rhoai-admin + job/pod + maassubscriptions RBAC
 │   ├── rbac.yaml               # Role + RoleBinding
 │   ├── pvc.yaml                # PVC for SQLite DB + run results
 │   ├── configmap-global.yaml   # Global cluster config (MAAS_API_URL, etc.)
 │   ├── configmap-scenarios.yaml# Scenario YAML files
 │   ├── deployment.yaml         # API server Deployment
 │   ├── service.yaml            # ClusterIP Service
-│   └── route.yaml              # OpenShift Route
+│   ├── route.yaml              # OpenShift Route (TLS edge termination)
+│   └── kustomization.yaml      # oc apply -k deploy/
 │
-├── Dockerfile                  # Single image for both API server and job runner
-├── Makefile                    # build, push, deploy, dev
-├── pyproject.toml              # deps: fastapi, uvicorn, kubernetes, aiosqlite, httpx, openai
+├── docs/
+│   ├── architecture/adrs/      # Architecture Decision Records (ADR-001 to ADR-013)
+│   └── project/
+│       └── implementation-plan.md  # Phased implementation plan
+│
+├── Dockerfile                  # Multi-stage: Node (UI build) → Python (API + harness)
+├── Makefile                    # build, push, deploy, dev, test, lint
+├── pyproject.toml              # Python deps: fastapi, uvicorn, kubernetes, aiosqlite, httpx, openai
 └── README.md
 ```
 
@@ -111,8 +126,9 @@ class Task(ABC):
     async def run(self, ctx: TaskContext) -> TaskResult: ...
     async def cleanup(self, ctx: TaskContext) -> None: ...
 ```
-- `TaskContext` carries: `maas_api_url`, `sa_token`, `shared_state: dict`, resolved config
+- `TaskContext` carries: `maas_api_url`, `sa_token`, `shared_state: dict`, resolved config, and an `emit_assertion_state()` helper
 - `shared_state` is how tasks pass data forward — e.g. `provision_api_key` writes created key IDs into `shared_state["api_keys"]`; the cleanup reads and deletes them all
+- `emit_assertion_state(ctx)` is called by tasks after every atomic operation that produces metric data (e.g. after each inference request in `send_requests`). It re-evaluates all assertions against the current `shared_state` and emits the result as a structured SSE event. Emission is debounced (at most every 100ms) to avoid flooding the channel at high request rates. Tasks without rolling metrics call it once on completion.
 - **Cleanup runs after ALL tasks complete (or fail) — not per-task.** This is intentional: lets you observe the effect of many accumulated keys/resources before cleanup
 
 ### Tiered Config (two-level merge)
@@ -180,15 +196,16 @@ cleanup: automatic
 - Primary cleanup targets: MaaS API keys (bulk-revoked via `/maas-api/v1/api-keys/bulk-revoke`) and `MaaSSubscription` CRs (restored or deleted via Kubernetes API)
 
 ### SA Permissions Required
-- `rhoai-admin` cluster role (or equivalent) to call MaaS API
+- `rhoai-admin` ClusterRole (or equivalent) — to call MaaS API
 - `create`, `get`, `list`, `watch` on `jobs` and `pods` in the harness namespace
 - `get` on `pods/log`
+- `get`, `create`, `patch`, `delete` on `maassubscriptions` (`maas.opendatahub.io/v1alpha1`) — for `rate_limit_validation` scenario
 
 ## Task Reference
 
 - **`provision_api_key`**: Calls `POST /maas-api/v1/api-keys` with the SA token. Stores created key IDs in `shared_state["api_keys"]`. Can be called multiple times to accumulate a pool of keys. Cleanup calls `POST /maas-api/v1/api-keys/bulk-revoke` to delete all created keys.
 
-- **`send_requests`**: Sends concurrent OpenAI-compatible inference requests. Accepts optional `url` and `token` params to override context defaults — enables `direct_inference` without a separate task class. When `key_pool` param is set (list of api keys from `shared_state["api_keys"]`), distributes requests evenly across the pool. Records latency, error rate, and throughput into `shared_state["inference_results"]` for assertion evaluation.
+- **`send_requests`**: Sends concurrent OpenAI-compatible inference requests. Resolves `url` and `token` via a three-level priority chain: (1) explicit YAML `params` (e.g. `${config.target_url}`), (2) inherited from `shared_state` (set by a prior task), (3) `TaskContext` defaults (MaaS model discovery + SA token). When `key_pool` param is set (list of api keys from `shared_state["api_keys"]`), distributes requests evenly across the pool (floor(M/N) per key, remainder to first). After every completed request, updates `shared_state["inference_results"]` (latency, error count, throughput) and calls `emit_assertion_state(ctx)`. Cleanup is a no-op.
 
 - **`check_maas_metrics`**: Reads the RHOAI/MaaS metrics endpoint (TBD), stores raw values in `shared_state["metrics"]` for assertion evaluation, and always prints a formatted human-readable summary to the run log — regardless of assertion pass/fail. Initial metrics validated: `total_requests` and `total_tokens` (to confirm they reflect the volume actually sent). More metrics TBD. Used as a final validation step in all MaaS-based scenarios (1, 2, 4, 5). Not used in `direct_inference` since it bypasses MaaS. Metrics pipeline data is not cleaned up — it is a read-only observation and cleanup of historical metrics data is deferred to future work.
 
@@ -214,23 +231,27 @@ cleanup: automatic
 - **Group limit probing**: How many groups can a user have in a subscription? Scenario that probes this limit.
 - **External model enumeration**: How many external models can a subscription have? Scenario that validates external model routes (OpenAI/Bedrock/Gemini) through the MaaS gateway.
 
-## Implementation Order
+## Implementation Plan
 
-1. `pyproject.toml` + `Dockerfile` (project skeleton)
-2. `harness/tasks/base.py` + `harness/tasks/registry.py` + `harness/config.py`
-3. Task implementations: `auth.py`, `inference.py`, `metrics.py` (stub)
-4. `harness/result.py` (assertion evaluation)
-5. `harness/runner.py` + `harness/main.py`
-6. Scenario YAML files
-7. `api/db.py` + `api/k8s.py`
-8. FastAPI routes
-9. UI (`index.html`, `app.js`, `styles.css`)
-10. Deploy manifests
-11. `Makefile` + `README.md`
+See [`docs/project/implementation-plan.md`](docs/project/implementation-plan.md) for the full phased plan including milestones for CI, documentation, and deployment. Summary of phases:
+
+| Phase | Scope |
+|---|---|
+| 0 | Project foundation: repo scaffold, pyproject.toml, package.json, Makefile, CI skeleton |
+| 1 | Harness core: Task ABC, `emit_assertion_state()`, config loader, assertion evaluator, ScenarioRunner |
+| 2 | Task implementations: `auth.py`, `inference.py`, `metrics.py` (stub), `subscription.py` |
+| 3 | Scenario YAMLs: all five scenarios with schema validation |
+| 4 | API server: FastAPI routes, SQLite, K8s job management, SSE log streaming |
+| 5 | Frontend: React + PatternFly UI with live assertion panel and run history |
+| 6 | Containerization: multi-stage Dockerfile, all deploy manifests, finalized Makefile |
+| 7 | Integration & E2E testing on a live RHOAI cluster |
+| 8 | CI/CD: lint + unit test + build on PRs; image push on release tags |
+| 9 | Documentation: quickstart, scenario authoring guide, task dev guide, runbook, API reference |
 
 ## Verification
 
-1. **Local harness**: `python -m harness.main --scenario single_key_load --run-id test-123` (needs real MaaS cluster env vars)
-2. **API server**: `uvicorn api.main:app --reload` → open browser, verify scenario list loads
-3. **End-to-end**: `oc apply -k deploy/` → open Route URL → trigger run → watch live logs → verify results in history → verify no leftover `kratos-*` MaaS API keys
-4. **Unit tests**: `pytest harness/tests/` with mocked MaaS HTTP responses (httpx mock)
+1. **Unit tests**: `make test` — runs `pytest harness/tests/` (mocked HTTP) + Jest (UI components)
+2. **Local harness**: `python -m harness.main --scenario single_key_load --run-id test-123` (needs real MaaS cluster env vars)
+3. **Local dev**: `make dev` — starts FastAPI dev server + Vite dev server; open browser, verify scenario list loads and assertion panel renders
+4. **Build**: `make build` — multi-stage Docker build (Node UI build → Python image)
+5. **End-to-end**: `make deploy` (`oc apply -k deploy/`) → open Route URL → trigger run → confirm live logs stream, assertion panel updates in real-time → verify results in history → verify no leftover `kratos-*` MaaS API keys → verify `MaaSSubscription` CR state restored after `rate_limit_validation`
