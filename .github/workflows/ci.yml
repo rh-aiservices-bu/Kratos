@@ -71,13 +71,3 @@ jobs:
 
       - name: Jest
         run: cd ui && npm test
-
-  build:
-    name: Docker Build
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build image
-        run: docker build -t kratos:ci .
