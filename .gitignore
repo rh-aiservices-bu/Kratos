@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.sqlite
+*.db
+
+# Frontend
+ui/node_modules/
+ui/dist/
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# K8s / OCP
+kubeconfig
