@@ -1,0 +1,18 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from harness.tasks.base import Task
+
+REGISTRY: dict[str, type[Task]] = {}
+
+
+def get_task_class(name: str) -> type[Task]:
+    if name not in REGISTRY:
+        raise KeyError(f"Unknown task: {name!r}. Available: {sorted(REGISTRY)}")
+    return REGISTRY[name]
+
+
+# Trigger self-registration of all known task modules
+from harness.tasks import stubs as _stubs  # noqa: E402, F401

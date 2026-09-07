@@ -1,0 +1,13 @@
+name: stub
+description: "Phase 1 stub scenario — two tasks that both pass"
+config:
+  dummy_value: 42
+tasks:
+  - name: stub_pass
+    params:
+      label: "first"
+  - name: stub_pass
+    params:
+      label: "second"
+assertions: {}
+cleanup: automatic
