@@ -1,6 +1,7 @@
 export interface Scenario {
   name: string;
   description: string;
+  config: Record<string, string | number | boolean>;
 }
 
 export interface Run {
@@ -23,11 +24,14 @@ export async function listScenarios(): Promise<Scenario[]> {
   return r.json() as Promise<Scenario[]>;
 }
 
-export async function createRun(scenario: string): Promise<CreateRunResponse> {
+export async function createRun(
+  scenario: string,
+  config_overrides: Record<string, string | number> = {},
+): Promise<CreateRunResponse> {
   const r = await fetch('/api/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scenario }),
+    body: JSON.stringify({ scenario, config_overrides }),
   });
   if (!r.ok) throw new Error(`createRun failed: ${r.status}`);
   return r.json() as Promise<CreateRunResponse>;

@@ -1,3 +1,4 @@
+import json
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -14,23 +15,25 @@ router = APIRouter()
 
 class RunRequest(BaseModel):
     scenario: str
+    config_overrides: dict = {}
 
 
 @router.post("/api/runs", status_code=201)
 async def create_run(body: RunRequest) -> dict:
     run_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
+    overrides_json = json.dumps(body.config_overrides) if body.config_overrides else None
 
     async with aiosqlite.connect(get_db_path()) as db:
         await db.execute(
-            "INSERT INTO runs (id, scenario, status, created_at, updated_at) VALUES (?,?,?,?,?)",
-            (run_id, body.scenario, "PENDING", now, now),
+            "INSERT INTO runs (id, scenario, status, created_at, updated_at, config_overrides) VALUES (?,?,?,?,?,?)",
+            (run_id, body.scenario, "PENDING", now, now, overrides_json),
         )
         await db.commit()
 
     status = "PENDING"
     try:
-        create_job(body.scenario, run_id)
+        create_job(body.scenario, run_id, body.config_overrides)
         status = "RUNNING"
     except Exception:
         print(f"[api] K8s job creation FAILED\n{traceback.format_exc()}", flush=True)

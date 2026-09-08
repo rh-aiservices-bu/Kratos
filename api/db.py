@@ -15,14 +15,20 @@ async def init_db() -> None:
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS runs (
-                id          TEXT PRIMARY KEY,
-                scenario    TEXT NOT NULL,
-                status      TEXT NOT NULL DEFAULT 'PENDING',
-                created_at  TEXT NOT NULL,
-                updated_at  TEXT NOT NULL
+                id               TEXT PRIMARY KEY,
+                scenario         TEXT NOT NULL,
+                status           TEXT NOT NULL DEFAULT 'PENDING',
+                created_at       TEXT NOT NULL,
+                updated_at       TEXT NOT NULL,
+                config_overrides TEXT
             )
             """
         )
+        # Migration: add config_overrides column to existing databases
+        try:
+            await db.execute("ALTER TABLE runs ADD COLUMN config_overrides TEXT")
+        except Exception:
+            pass  # column already exists
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS task_results (

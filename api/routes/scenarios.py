@@ -22,6 +22,7 @@ async def list_scenarios() -> list[dict]:
             {
                 "name": raw.get("name", f.stem),
                 "description": raw.get("description", ""),
+                "config": raw.get("config", {}),
             }
         )
     return result

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from collections.abc import AsyncGenerator
 
@@ -31,13 +32,21 @@ def _api_server_node(k8s: object) -> str | None:
     return None
 
 
-def create_job(scenario: str, run_id: str) -> None:
+def create_job(scenario: str, run_id: str, config_overrides: dict | None = None) -> None:
     k8s = _kube()
     batch = k8s.BatchV1Api()
 
     # Pin the Job to the same node as the API server so both pods can mount the
     # ReadWriteOnce PVC simultaneously (RWO allows multiple pods on the same node).
     node_name = _api_server_node(k8s)
+
+    extra_env = [
+        k8s.V1EnvVar(
+            name="KRATOS_CONFIG_OVERRIDES",
+            value=json.dumps(config_overrides or {}),
+        )
+    ]
+
     pod_spec = k8s.V1PodSpec(
         service_account_name="kratos",
         restart_policy="Never",
@@ -48,11 +57,12 @@ def create_job(scenario: str, run_id: str) -> None:
                 image=IMAGE,
                 command=["python", "-m", "harness.main"],
                 args=[
-                                "--scenario",
-                                f"{os.environ.get('SCENARIOS_DIR', '/app/scenarios')}/{scenario}.yaml",
-                                "--run-id",
-                                run_id,
-                            ],
+                    "--scenario",
+                    f"{os.environ.get('SCENARIOS_DIR', '/app/scenarios')}/{scenario}.yaml",
+                    "--run-id",
+                    run_id,
+                ],
+                env=extra_env,
                 env_from=[
                     k8s.V1EnvFromSource(
                         config_map_ref=k8s.V1ConfigMapEnvSource(name=_GLOBAL_CM)

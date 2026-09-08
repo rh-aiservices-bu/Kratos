@@ -6,7 +6,17 @@ export interface AssertionState {
   name: string;
   status: 'PENDING' | 'PASSING' | 'FAILING';
   value: number | null;
+  expression?: string;
 }
+
+type StreamStatus = 'connecting' | 'streaming' | 'completed' | 'error';
+
+const STATUS_LABEL: Record<StreamStatus, string> = {
+  connecting: 'Connecting',
+  streaming: 'Streaming',
+  completed: 'Completed',
+  error: 'Error',
+};
 
 interface Props {
   runId: string;
@@ -15,11 +25,15 @@ interface Props {
 
 export function LogStream({ runId, onAssertionUpdate }: Props) {
   const [lines, setLines] = useState<string[]>([]);
+  const [status, setStatus] = useState<StreamStatus>('connecting');
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setLines([]);
+    setStatus('connecting');
     const es = openLogStream(runId);
+
+    es.onopen = () => setStatus('streaming');
 
     es.onmessage = (ev) => {
       const raw: string = ev.data;
@@ -29,19 +43,23 @@ export function LogStream({ runId, onAssertionUpdate }: Props) {
           onAssertionUpdate(parsed.data);
           return;
         }
+        if (parsed.event === 'done') {
+          setStatus('completed');
+          return;
+        }
       } catch {
-        // not JSON — treat as a plain log line
+        // not JSON — plain log line
       }
+      setStatus((prev) => (prev === 'connecting' ? 'streaming' : prev));
       setLines((prev) => [...prev, raw]);
     };
 
     es.onerror = () => {
       es.close();
+      setStatus((prev) => (prev === 'streaming' ? 'completed' : 'error'));
     };
 
-    return () => {
-      es.close();
-    };
+    return () => { es.close(); };
   }, [runId, onAssertionUpdate]);
 
   useEffect(() => {
@@ -49,9 +67,20 @@ export function LogStream({ runId, onAssertionUpdate }: Props) {
   }, [lines]);
 
   return (
-    <CodeBlock style={{ maxHeight: '400px', overflowY: 'auto' }}>
-      <CodeBlockCode>{lines.join('\n') || '(waiting for logs…)'}</CodeBlockCode>
-      <div ref={bottomRef} />
-    </CodeBlock>
+    <div className="kratos-log-block">
+      <div className={`kratos-stream-status kratos-stream-status--${status}`}>
+        <span className="kratos-stream-status__dot" />
+        <span>{STATUS_LABEL[status]}</span>
+        {lines.length > 0 && (
+          <span style={{ marginLeft: 'auto', fontWeight: 400, fontSize: '0.75rem', color: '#888' }}>
+            {lines.length} lines
+          </span>
+        )}
+      </div>
+      <CodeBlock style={{ maxHeight: '420px', overflowY: 'auto' }}>
+        <CodeBlockCode>{lines.join('\n') || '(waiting for logs…)'}</CodeBlockCode>
+        <div ref={bottomRef} />
+      </CodeBlock>
+    </div>
   );
 }

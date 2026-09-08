@@ -50,7 +50,12 @@ class ScenarioRunner:
             payload = {
                 "event": "assertion_state",
                 "data": [
-                    {"name": r.name, "status": r.status, "value": r.current_value}
+                    {
+                        "name": r.name,
+                        "status": r.status,
+                        "value": r.current_value,
+                        "expression": r.expression,
+                    }
                     for r in results
                 ],
             }

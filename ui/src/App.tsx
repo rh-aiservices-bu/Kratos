@@ -1,50 +1,66 @@
 import { useState } from 'react';
-import { Page, PageSection, Title } from '@patternfly/react-core';
-import { AssertionPanel } from './components/AssertionPanel';
-import { LogStream, type AssertionState } from './components/LogStream';
+import { Page, PageSection } from '@patternfly/react-core';
+import { RunDetail } from './components/RunDetail';
 import { RunHistory } from './components/RunHistory';
 import { RunTrigger } from './components/RunTrigger';
 import { ScenarioList } from './components/ScenarioList';
 import type { Scenario } from './api/client';
 
+type AppView = { page: 'home' } | { page: 'run'; runId: string };
+
+function KratosMasthead() {
+  return (
+    <header className="kratos-masthead">
+      <div className="kratos-masthead__logo">
+        <span>&#9876;</span>
+        <span>
+          KR<span className="kratos-masthead__logo-accent">A</span>TOS
+        </span>
+      </div>
+      <div className="kratos-masthead__divider" />
+      <span className="kratos-masthead__subtitle">RHOAI MaaS Test Harness</span>
+    </header>
+  );
+}
+
 function App() {
+  const [view, setView] = useState<AppView>({ page: 'home' });
   const [triggerScenario, setTriggerScenario] = useState<Scenario | null>(null);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
-  const [assertions, setAssertions] = useState<AssertionState[]>([]);
   const [historyKey, setHistoryKey] = useState(0);
 
   function handleRunStart(runId: string) {
-    setActiveRunId(runId);
-    setAssertions([]);
     setTriggerScenario(null);
     setHistoryKey((k) => k + 1);
+    setView({ page: 'run', runId });
+  }
+
+  if (view.page === 'run') {
+    return (
+      <>
+        <KratosMasthead />
+        <RunDetail
+          runId={view.runId}
+          onBack={() => setView({ page: 'home' })}
+        />
+      </>
+    );
   }
 
   return (
-    <Page>
-      <PageSection>
-        <Title headingLevel="h1" size="xl">
-          Kratos — RHOAI MaaS Test Harness
-        </Title>
-      </PageSection>
-
-      <PageSection>
-        <ScenarioList onRun={setTriggerScenario} />
-      </PageSection>
-
-      {activeRunId !== null && (
+    <>
+      <KratosMasthead />
+      <Page>
         <PageSection>
-          <LogStream runId={activeRunId} onAssertionUpdate={setAssertions} />
-          <AssertionPanel assertions={assertions} />
+          <ScenarioList onRun={setTriggerScenario} />
         </PageSection>
-      )}
 
-      <PageSection>
-        <Title headingLevel="h2" size="lg">
-          Run History
-        </Title>
-        <RunHistory key={historyKey} />
-      </PageSection>
+        <PageSection>
+          <RunHistory
+            key={historyKey}
+            onViewRun={(runId) => setView({ page: 'run', runId })}
+          />
+        </PageSection>
+      </Page>
 
       {triggerScenario !== null && (
         <RunTrigger
@@ -53,7 +69,7 @@ function App() {
           onCancel={() => setTriggerScenario(null)}
         />
       )}
-    </Page>
+    </>
   );
 }
 

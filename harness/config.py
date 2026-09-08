@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from pathlib import Path
@@ -31,14 +32,22 @@ def load_scenario(path: str) -> dict:
     """Load and resolve a scenario YAML.
 
     Config precedence (highest → lowest):
-      1. Scenario YAML ``config:`` section
-      2. Environment variables (injected from global ConfigMap)
+      1. KRATOS_CONFIG_OVERRIDES env var (user-provided via UI)
+      2. Scenario YAML ``config:`` section
+      3. Environment variables (injected from global ConfigMap)
     """
     raw: dict = yaml.safe_load(Path(path).read_text())
 
     global_config: dict[str, Any] = dict(os.environ)
     scenario_config: dict[str, Any] = raw.get("config", {}) or {}
-    merged_config: dict[str, Any] = {**global_config, **scenario_config}
+
+    user_overrides: dict[str, Any] = {}
+    try:
+        user_overrides = json.loads(os.environ.get("KRATOS_CONFIG_OVERRIDES", "{}")) or {}
+    except Exception:
+        pass
+
+    merged_config: dict[str, Any] = {**global_config, **scenario_config, **user_overrides}
 
     resolved_tasks = []
     for task in raw.get("tasks", []) or []:
