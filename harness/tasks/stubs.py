@@ -19,7 +19,7 @@ class StubPassTask(Task):
         )
 
     async def cleanup(self, ctx: TaskContext) -> None:
-        print(f"[stub_pass] cleanup", flush=True)
+        print("[stub_pass] cleanup", flush=True)
 
 
 class StubFailTask(Task):
@@ -28,7 +28,7 @@ class StubFailTask(Task):
         raise RuntimeError("stub task intentionally failed")
 
     async def cleanup(self, ctx: TaskContext) -> None:
-        print(f"[stub_fail] cleanup", flush=True)
+        print("[stub_fail] cleanup", flush=True)
 
 
 REGISTRY["stub_pass"] = StubPassTask

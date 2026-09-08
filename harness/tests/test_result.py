@@ -2,7 +2,6 @@ import pytest
 
 from harness.result import (
     AssertionResult,
-    RunResult,
     TaskResult,
     compute_run_status,
     evaluate_all_assertions,

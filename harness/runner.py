@@ -3,7 +3,6 @@ import time
 
 from harness.config import load_scenario
 from harness.result import (
-    AssertionResult,
     RunResult,
     TaskResult,
     compute_run_status,
