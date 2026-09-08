@@ -1,0 +1,22 @@
+name: multi_key_load
+description: "Multi-key load test — N keys, M requests distributed evenly across the key pool"
+config:
+  key_count: 5
+  request_count: 5
+  concurrency: 5
+  prompt: "Hello, world!"
+tasks:
+  - name: provision_api_key
+    params:
+      key_name: "kratos-multi-key"
+      count: "${config.key_count}"
+  - name: send_requests
+    params:
+      count: "${config.request_count}"
+      concurrency: "${config.concurrency}"
+      prompt: "${config.prompt}"
+      key_pool: true
+  - name: check_maas_metrics
+assertions:
+  error_rate_pct: "< 5"
+cleanup: automatic

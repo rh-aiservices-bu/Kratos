@@ -1,4 +1,4 @@
-IMAGE ?= quay.io/wparker/kratos:latest
+IMAGE ?= quay.io/USER/kratos:latest
 SCENARIOS_DIR ?= scenarios
 
 .PHONY: lint test build push deploy dev clean
@@ -13,10 +13,10 @@ test:
 	cd ui && npm test
 
 build:
-	docker build -t $(IMAGE) .
+	podman build -t $(IMAGE) .
 
 push: build
-	docker push $(IMAGE)
+	podman push $(IMAGE)
 
 deploy:
 	oc apply -k deploy/

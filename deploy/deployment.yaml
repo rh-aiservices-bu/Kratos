@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kratos
+  namespace: kratos
+  labels:
+    app: kratos
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kratos
+  template:
+    metadata:
+      labels:
+        app: kratos
+    spec:
+      serviceAccountName: kratos
+      containers:
+        - name: api
+          image: quay.io/wparker/kratos:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: kratos-global-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: scenarios
+              mountPath: /app/scenarios
+          readinessProbe:
+            httpGet:
+              path: /api/scenarios
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: kratos-data
+        - name: scenarios
+          configMap:
+            name: kratos-scenarios

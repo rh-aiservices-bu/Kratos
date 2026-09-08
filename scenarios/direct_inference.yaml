@@ -1,0 +1,19 @@
+name: direct_inference
+description: "Direct inference — bypasses MaaS gateway, tests the underlying model serving endpoint"
+config:
+  target_url: ""
+  target_token: ""
+  request_count: 50
+  concurrency: 5
+  prompt: "Hello, world!"
+tasks:
+  - name: send_requests
+    params:
+      url: "${config.target_url}"
+      token: "${config.target_token}"
+      count: "${config.request_count}"
+      concurrency: "${config.concurrency}"
+      prompt: "${config.prompt}"
+assertions:
+  error_rate_pct: "< 5"
+cleanup: automatic

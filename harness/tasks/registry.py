@@ -16,3 +16,7 @@ def get_task_class(name: str) -> type[Task]:
 
 # Trigger self-registration of all known task modules
 from harness.tasks import stubs as _stubs  # noqa: E402, F401
+from harness.tasks import auth as _auth  # noqa: E402, F401
+from harness.tasks import inference as _inference  # noqa: E402, F401
+from harness.tasks import metrics as _metrics  # noqa: E402, F401
+from harness.tasks import subscription as _subscription  # noqa: E402, F401

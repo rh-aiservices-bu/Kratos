@@ -1,0 +1,21 @@
+name: single_key_load
+description: "Baseline load test — one key, N requests through MaaS"
+config:
+  request_count: 100
+  concurrency: 5
+  prompt: "Hello, world!"
+tasks:
+  - name: provision_api_key
+    params:
+      key_name: "kratos-load-key"
+  - name: send_requests
+    params:
+      count: "${config.request_count}"
+      concurrency: "${config.concurrency}"
+      prompt: "${config.prompt}"
+      key_pool: true
+  - name: check_maas_metrics
+assertions:
+  error_rate_pct: "< 5"
+  p99_latency_ms: "< 10000"
+cleanup: automatic

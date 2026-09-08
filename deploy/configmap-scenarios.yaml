@@ -1,0 +1,126 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kratos-scenarios
+  namespace: kratos
+data:
+  single_key_load.yaml: |
+    name: single_key_load
+    description: "Baseline load test — one key, N requests through MaaS"
+    config:
+      request_count: 100
+      concurrency: 5
+      prompt: "Hello, world!"
+    tasks:
+      - name: provision_api_key
+        params:
+          key_name: "kratos-load-key"
+      - name: send_requests
+        params:
+          count: "${config.request_count}"
+          concurrency: "${config.concurrency}"
+          prompt: "${config.prompt}"
+          key_pool: true
+      - name: check_maas_metrics
+    assertions:
+      error_rate_pct: "< 5"
+      p99_latency_ms: "< 10000"
+    cleanup: automatic
+
+  multi_key_load.yaml: |
+    name: multi_key_load
+    description: "Multi-key load test — N keys, M requests distributed evenly across the key pool"
+    config:
+      key_count: 5
+      request_count: 5
+      concurrency: 5
+      prompt: "Hello, world!"
+    tasks:
+      - name: provision_api_key
+        params:
+          key_name: "kratos-multi-key"
+          count: "${config.key_count}"
+      - name: send_requests
+        params:
+          count: "${config.request_count}"
+          concurrency: "${config.concurrency}"
+          prompt: "${config.prompt}"
+          key_pool: true
+      - name: check_maas_metrics
+    assertions:
+      error_rate_pct: "< 5"
+    cleanup: automatic
+
+  direct_inference.yaml: |
+    name: direct_inference
+    description: "Direct inference — bypasses MaaS gateway, tests the underlying model serving endpoint"
+    config:
+      target_url: ""
+      target_token: ""
+      request_count: 50
+      concurrency: 5
+      prompt: "Hello, world!"
+    tasks:
+      - name: send_requests
+        params:
+          url: "${config.target_url}"
+          token: "${config.target_token}"
+          count: "${config.request_count}"
+          concurrency: "${config.concurrency}"
+          prompt: "${config.prompt}"
+    assertions:
+      error_rate_pct: "< 5"
+    cleanup: automatic
+
+  rate_limit_validation.yaml: |
+    name: rate_limit_validation
+    description: "Rate-limit validation — applies a MaaSSubscription CR and asserts throughput stays at or below the configured RPS limit"
+    config:
+      rate_limit_rps: 10
+      request_count: 100
+      concurrency: 20
+      key_count: 1
+      prompt: "Hello, world!"
+    tasks:
+      - name: apply_rate_limit_subscription
+        params:
+          rps_limit: "${config.rate_limit_rps}"
+      - name: provision_api_key
+        params:
+          key_name: "kratos-rate-key"
+          count: "${config.key_count}"
+      - name: send_requests
+        params:
+          count: "${config.request_count}"
+          concurrency: "${config.concurrency}"
+          prompt: "${config.prompt}"
+          key_pool: true
+      - name: check_maas_metrics
+    assertions:
+      throughput_rps: "<= ${config.rate_limit_rps}"
+      error_rate_pct: "< 30"
+    cleanup: automatic
+
+  metrics_fill.yaml: |
+    name: metrics_fill
+    description: "Metrics fill — sends a burst of requests and validates the MaaS metrics pipeline is populated correctly"
+    config:
+      request_count: 200
+      concurrency: 10
+      prompt: "Hello, world!"
+      metrics_min_requests: 190
+    tasks:
+      - name: provision_api_key
+        params:
+          key_name: "kratos-metrics-key"
+      - name: send_requests
+        params:
+          count: "${config.request_count}"
+          concurrency: "${config.concurrency}"
+          prompt: "${config.prompt}"
+          key_pool: true
+      - name: check_maas_metrics
+    assertions:
+      error_rate_pct: "< 5"
+      total_requests: ">= ${config.metrics_min_requests}"
+    cleanup: automatic

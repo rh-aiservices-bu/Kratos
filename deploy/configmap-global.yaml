@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kratos-global-config
+  namespace: kratos
+data:
+  MAAS_API_URL: ""          # set to https://maas.<cluster-domain>
+  DEFAULT_MODEL: "granite-3-8b-instruct"
+  DEFAULT_SUBSCRIPTION: ""  # empty = auto-select highest priority
+  NAMESPACE: "kratos"
+  KRATOS_IMAGE: "quay.io/wparker/kratos:latest"
+  DB_PATH: "/data/kratos.db"
+  SCENARIOS_DIR: "/app/scenarios"
