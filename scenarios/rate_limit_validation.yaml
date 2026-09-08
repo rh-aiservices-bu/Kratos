@@ -14,7 +14,7 @@ tasks:
     params:
       key_name: "kratos-rate-key"
       count: "${config.key_count}"
-  - name: send_requests
+  - name: guidellm_benchmark
     params:
       count: "${config.request_count}"
       concurrency: "${config.concurrency}"

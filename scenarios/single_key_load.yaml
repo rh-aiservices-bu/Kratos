@@ -8,7 +8,7 @@ tasks:
   - name: provision_api_key
     params:
       key_name: "kratos-load-key"
-  - name: send_requests
+  - name: guidellm_benchmark
     params:
       count: "${config.request_count}"
       concurrency: "${config.concurrency}"

@@ -7,7 +7,7 @@ config:
   concurrency: 5
   prompt: "Hello, world!"
 tasks:
-  - name: send_requests
+  - name: guidellm_benchmark
     params:
       url: "${config.target_url}"
       token: "${config.target_token}"

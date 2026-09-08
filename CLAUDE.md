@@ -223,6 +223,10 @@ cleanup: automatic
 
 **Design note**: Tasks are kept atomic and composable so future scenarios can reuse just `provision_api_key`, just `send_requests`, etc.
 
+## Known Scaling Concern: GuideLLM per-key instances
+
+`guidellm_benchmark` with `key_pool: true` spawns one GuideLLM subprocess per API key (all in parallel). This is fine for small key counts (≤ ~20) but will produce significant process overhead at large scales (e.g. 10k keys → 10k processes). If this becomes a problem, revisit with a `max_parallel_instances` param that batches keys across fewer GuideLLM processes — each process would then use only one key from its batch, so extra keys in the batch would be unused. The right fix at that scale may be to separate load generation (one GuideLLM instance) from key validation (a lightweight probe per key).
+
 ## Future Features / Scenario Ideas
 
 - **Historic metadata testing**: Pre-populate metrics store with backdated requests to simulate a year of data. Needs research into Prometheus remote-write or MaaS-specific APIs. **Requires cluster admin** — writing backdated data directly to the metrics store is not possible with rhoai-admin alone.

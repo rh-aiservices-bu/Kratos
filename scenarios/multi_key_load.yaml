@@ -10,12 +10,13 @@ tasks:
     params:
       key_name: "kratos-multi-key"
       count: "${config.key_count}"
-  - name: send_requests
+  - name: guidellm_benchmark
     params:
       count: "${config.request_count}"
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
       key_pool: true
+      data_source: independent
   - name: check_maas_metrics
 assertions:
   error_rate_pct: "< 5"
