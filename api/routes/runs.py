@@ -1,3 +1,4 @@
+import traceback
 import uuid
 from datetime import datetime, timezone
 
@@ -31,8 +32,8 @@ async def create_run(body: RunRequest) -> dict:
     try:
         create_job(body.scenario, run_id)
         status = "RUNNING"
-    except Exception as exc:
-        print(f"[api] K8s job creation failed: {exc}", flush=True)
+    except Exception:
+        print(f"[api] K8s job creation FAILED\n{traceback.format_exc()}", flush=True)
 
     async with aiosqlite.connect(get_db_path()) as db:
         await db.execute(

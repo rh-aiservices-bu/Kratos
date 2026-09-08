@@ -17,32 +17,73 @@ def _kube():
     return k8s
 
 
+def _api_server_node(k8s: object) -> str | None:
+    """Return the node name the API server pod is running on, or None if unknown."""
+    try:
+        core = k8s.CoreV1Api()  # type: ignore[attr-defined]
+        pods = core.list_namespaced_pod(
+            namespace=NAMESPACE, label_selector="app=kratos"
+        )
+        if pods.items:
+            return pods.items[0].spec.node_name
+    except Exception:
+        pass
+    return None
+
+
 def create_job(scenario: str, run_id: str) -> None:
     k8s = _kube()
     batch = k8s.BatchV1Api()
+
+    # Pin the Job to the same node as the API server so both pods can mount the
+    # ReadWriteOnce PVC simultaneously (RWO allows multiple pods on the same node).
+    node_name = _api_server_node(k8s)
+    pod_spec = k8s.V1PodSpec(
+        service_account_name="kratos",
+        restart_policy="Never",
+        node_name=node_name,  # None means "let scheduler decide" — safe fallback
+        containers=[
+            k8s.V1Container(
+                name="harness",
+                image=IMAGE,
+                command=["python", "-m", "harness.main"],
+                args=[
+                                "--scenario",
+                                f"{os.environ.get('SCENARIOS_DIR', '/app/scenarios')}/{scenario}.yaml",
+                                "--run-id",
+                                run_id,
+                            ],
+                env_from=[
+                    k8s.V1EnvFromSource(
+                        config_map_ref=k8s.V1ConfigMapEnvSource(name=_GLOBAL_CM)
+                    )
+                ],
+                volume_mounts=[
+                    k8s.V1VolumeMount(name="data", mount_path="/data"),
+                ],
+            )
+        ],
+        volumes=[
+            k8s.V1Volume(
+                name="data",
+                persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
+                    claim_name="kratos-data"
+                ),
+            )
+        ],
+    )
+
+    # Sanitise scenario name for use in a DNS label (lowercase, hyphens only).
+    safe_scenario = scenario.lower().replace("_", "-")[:12].rstrip("-")
+    job_name = f"kratos-{safe_scenario}-{run_id[:6]}"
+
     job = k8s.V1Job(
-        metadata=k8s.V1ObjectMeta(name=f"kratos-{run_id[:8]}"),
+        metadata=k8s.V1ObjectMeta(name=job_name),
         spec=k8s.V1JobSpec(
             ttl_seconds_after_finished=3600,
             template=k8s.V1PodTemplateSpec(
                 metadata=k8s.V1ObjectMeta(labels={"kratos-run-id": run_id}),
-                spec=k8s.V1PodSpec(
-                    service_account_name="kratos",
-                    restart_policy="Never",
-                    containers=[
-                        k8s.V1Container(
-                            name="harness",
-                            image=IMAGE,
-                            command=["python", "-m", "harness.main"],
-                            args=["--scenario", scenario, "--run-id", run_id],
-                            env_from=[
-                                k8s.V1EnvFromSource(
-                                    config_map_ref=k8s.V1ConfigMapEnvSource(name=_GLOBAL_CM)
-                                )
-                            ],
-                        )
-                    ],
-                ),
+                spec=pod_spec,
             ),
         ),
     )

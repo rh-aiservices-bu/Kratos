@@ -4,10 +4,10 @@ metadata:
   name: kratos-global-config
   namespace: kratos
 data:
-  MAAS_API_URL: ""          # set to https://maas.<cluster-domain>
-  DEFAULT_MODEL: "granite-3-8b-instruct"
+  MAAS_API_URL: "https://maas.apps.cluster-9gzzs.9gzzs.sandbox2510.opentlc.com"          # set to https://maas.<cluster-domain>
+  DEFAULT_MODEL: "RedHatAI/Ministral-3-3B-Instruct-2512" #"publishers/llms/models/redhataiministral-3-3b-instruc" 
   DEFAULT_SUBSCRIPTION: ""  # empty = auto-select highest priority
   NAMESPACE: "kratos"
-  KRATOS_IMAGE: "quay.io/wparker/kratos:latest"
+  KRATOS_IMAGE: "quay.io/willsparker/kratos:latest"
   DB_PATH: "/data/kratos.db"
   SCENARIOS_DIR: "/app/scenarios"
