@@ -5,16 +5,21 @@ import { listRuns, type Run } from '../api/client';
 
 const ACTIVE_STATUSES = new Set(['PENDING', 'RUNNING']);
 
-function StatusBadge({ status }: { status: string }) {
-  const upper = status.toUpperCase();
-  let colorClass = 'kratos-status-pend';
-  if (upper === 'PASS') colorClass = 'kratos-status-pass';
-  else if (upper === 'FAIL') colorClass = 'kratos-status-fail';
-  else if (upper === 'RUNNING') colorClass = 'kratos-status-run';
+function statusColor(status: string): 'green' | 'red' | 'blue' | 'grey' {
+  const u = status.toUpperCase();
+  if (u === 'PASS') return 'green';
+  if (u === 'FAIL') return 'red';
+  if (u === 'RUNNING') return 'blue';
+  return 'grey';
+}
 
+function StatusBadge({ status }: { status: string }) {
   return (
-    <Label className={colorClass} style={{ fontWeight: 700, fontSize: '0.72rem', letterSpacing: '0.04em' }}>
-      {upper}
+    <Label
+      color={statusColor(status)}
+      style={{ fontWeight: 700, fontSize: '0.72rem', letterSpacing: '0.04em' }}
+    >
+      {status.toUpperCase()}
     </Label>
   );
 }

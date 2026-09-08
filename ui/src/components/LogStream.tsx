@@ -26,7 +26,7 @@ interface Props {
 export function LogStream({ runId, onAssertionUpdate }: Props) {
   const [lines, setLines] = useState<string[]>([]);
   const [status, setStatus] = useState<StreamStatus>('connecting');
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setLines([]);
@@ -62,8 +62,10 @@ export function LogStream({ runId, onAssertionUpdate }: Props) {
     return () => { es.close(); };
   }, [runId, onAssertionUpdate]);
 
+  // Scroll within the container only — never touch window scroll position.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView?.({ behavior: 'smooth' });
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [lines]);
 
   return (
@@ -77,10 +79,11 @@ export function LogStream({ runId, onAssertionUpdate }: Props) {
           </span>
         )}
       </div>
-      <CodeBlock style={{ maxHeight: '420px', overflowY: 'auto' }}>
-        <CodeBlockCode>{lines.join('\n') || '(waiting for logs…)'}</CodeBlockCode>
-        <div ref={bottomRef} />
-      </CodeBlock>
+      <div ref={scrollRef} style={{ maxHeight: '420px', overflowY: 'auto' }}>
+        <CodeBlock>
+          <CodeBlockCode>{lines.join('\n') || '(waiting for logs…)'}</CodeBlockCode>
+        </CodeBlock>
+      </div>
     </div>
   );
 }

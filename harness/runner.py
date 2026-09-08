@@ -59,7 +59,7 @@ class ScenarioRunner:
                     for r in results
                 ],
             }
-            print(f"data: {json.dumps(payload)}", flush=True)
+            print(json.dumps(payload), flush=True)
 
         ctx = TaskContext(
             run_id=self.run_id,

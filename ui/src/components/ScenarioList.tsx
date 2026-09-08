@@ -4,7 +4,6 @@ import {
   Button,
   Card,
   CardBody,
-  CardTitle,
   EmptyState,
   EmptyStateBody,
   Spinner,
@@ -69,14 +68,20 @@ export function ScenarioList({ onRun }: Props) {
       {scenarios.map((s) => (
         <StackItem key={s.name} className="kratos-scenario-card">
           <Card>
-            <CardTitle>
-              <span className="kratos-scenario-name">{formatScenarioName(s.name)}</span>
-            </CardTitle>
-            <CardBody>
-              <p style={{ marginBottom: '1rem', color: '#555' }}>{s.description}</p>
-              <Button variant="primary" onClick={() => onRun(s)}>
-                Run
-              </Button>
+            <CardBody style={{ padding: '0.75rem 1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="kratos-scenario-name" style={{ marginBottom: '0.25rem' }}>
+                    {formatScenarioName(s.name)}
+                  </div>
+                  <p style={{ margin: 0, color: '#666', fontSize: '0.8rem', lineHeight: 1.4 }}>
+                    {s.description}
+                  </p>
+                </div>
+                <Button variant="primary" onClick={() => onRun(s)} style={{ flexShrink: 0, alignSelf: 'center' }}>
+                  Run
+                </Button>
+              </div>
             </CardBody>
           </Card>
         </StackItem>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Page, PageSection } from '@patternfly/react-core';
+import { Grid, GridItem, Page, PageSection } from '@patternfly/react-core';
 import { RunDetail } from './components/RunDetail';
 import { RunHistory } from './components/RunHistory';
 import { RunTrigger } from './components/RunTrigger';
@@ -18,7 +18,7 @@ function KratosMasthead() {
         </span>
       </div>
       <div className="kratos-masthead__divider" />
-      <span className="kratos-masthead__subtitle">RHOAI MaaS Test Harness</span>
+      <span className="kratos-masthead__subtitle">RHOAI Test Harness</span>
     </header>
   );
 }
@@ -51,14 +51,19 @@ function App() {
       <KratosMasthead />
       <Page>
         <PageSection>
-          <ScenarioList onRun={setTriggerScenario} />
-        </PageSection>
-
-        <PageSection>
-          <RunHistory
-            key={historyKey}
-            onViewRun={(runId) => setView({ page: 'run', runId })}
-          />
+          <Grid hasGutter>
+            <GridItem span={4}>
+              <ScenarioList onRun={setTriggerScenario} />
+            </GridItem>
+            <GridItem span={8}>
+              <div style={{ maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }}>
+                <RunHistory
+                  key={historyKey}
+                  onViewRun={(runId) => setView({ page: 'run', runId })}
+                />
+              </div>
+            </GridItem>
+          </Grid>
         </PageSection>
       </Page>
 

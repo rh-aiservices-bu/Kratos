@@ -40,6 +40,10 @@ export function RunDetail({ runId, onBack }: Props) {
   const [assertions, setAssertions] = useState<AssertionState[]>([]);
 
   useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, []);
+
+  useEffect(() => {
     getRun(runId).then(setRun).catch(console.error);
     const interval = setInterval(() => {
       getRun(runId)

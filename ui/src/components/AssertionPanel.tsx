@@ -29,7 +29,16 @@ function formatValue(v: number | null): string {
 }
 
 export function AssertionPanel({ assertions }: Props) {
-  if (assertions.length === 0) return null;
+  if (assertions.length === 0) {
+    return (
+      <div>
+        <p className="kratos-section-heading">Assertions</p>
+        <p style={{ color: '#aaa', fontSize: '0.85rem', fontStyle: 'italic' }}>
+          Waiting for assertion data…
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div>
