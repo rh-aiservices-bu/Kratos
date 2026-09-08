@@ -1,4 +1,5 @@
 import time
+import traceback
 
 import httpx
 
@@ -23,8 +24,11 @@ class CheckMaasMetricsTask(Task):
                     )
                     resp.raise_for_status()
                     raw.update(resp.json())
-            except Exception as exc:
-                print(f"[check_maas_metrics] could not fetch metrics: {exc}", flush=True)
+            except Exception:
+                print(
+                    f"[check_maas_metrics] could not fetch metrics\n{traceback.format_exc()}",
+                    flush=True,
+                )
         else:
             print(
                 "[check_maas_metrics] no metrics URL configured — using stub zeroes", flush=True

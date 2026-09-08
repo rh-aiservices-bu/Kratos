@@ -226,7 +226,7 @@ async def test_url_resolution_sa_token_fallback(httpx_mock) -> None:
         await task.run(ctx)
 
     mock_cls.assert_called_with(
-        api_key="test-token", base_url="http://model.test/v1/chat/completions"
+        api_key="test-token", base_url="http://model.test/v1"
     )
 
 

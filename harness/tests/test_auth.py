@@ -58,11 +58,16 @@ async def test_provision_api_key_accumulates_multiple_keys(httpx_mock: HTTPXMock
     assert len(ctx.shared_state["api_keys"]) == 2
 
 
-async def test_provision_api_key_cleanup_bulk_revokes(httpx_mock: HTTPXMock) -> None:
+async def test_provision_api_key_cleanup_deletes_individually(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
-        url="http://maas.test/maas-api/v1/api-keys/bulk-revoke",
-        method="POST",
-        json={"revoked": 2},
+        url="http://maas.test/maas-api/v1/api-keys/id-1",
+        method="DELETE",
+        status_code=204,
+    )
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys/id-2",
+        method="DELETE",
+        status_code=204,
     )
 
     ctx = _make_ctx(
@@ -72,9 +77,12 @@ async def test_provision_api_key_cleanup_bulk_revokes(httpx_mock: HTTPXMock) -> 
     await task.cleanup(ctx)
 
     requests = httpx_mock.get_requests()
-    assert len(requests) == 1
-    body = json.loads(requests[0].content)
-    assert sorted(body["ids"]) == ["id-1", "id-2"]
+    assert len(requests) == 2
+    urls = {str(r.url) for r in requests}
+    assert urls == {
+        "http://maas.test/maas-api/v1/api-keys/id-1",
+        "http://maas.test/maas-api/v1/api-keys/id-2",
+    }
 
 
 async def test_provision_api_key_cleanup_noop_when_empty() -> None:

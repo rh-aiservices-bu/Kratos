@@ -1,5 +1,18 @@
 import json
 import time
+import traceback
+from pathlib import Path
+
+_SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+
+def _read_sa_token(config: dict) -> str:
+    if token := config.get("SA_TOKEN", ""):
+        return token
+    try:
+        return Path(_SA_TOKEN_PATH).read_text().strip()
+    except OSError:
+        return ""
 
 from harness.config import load_scenario
 from harness.result import (
@@ -47,7 +60,7 @@ class ScenarioRunner:
             run_id=self.run_id,
             scenario_name=scenario_name,
             maas_api_url=config.get("MAAS_API_URL", ""),
-            sa_token=config.get("SA_TOKEN", ""),
+            sa_token=_read_sa_token(config),
             shared_state=shared_state,
             config=config,
             assertions=assertions,
@@ -73,6 +86,10 @@ class ScenarioRunner:
                     break
             except Exception as exc:
                 duration_ms = (time.monotonic() - start) * 1000
+                print(
+                    f"[runner] task FAILED: {task.name}\n{traceback.format_exc()}",
+                    flush=True,
+                )
                 task_results.append(
                     TaskResult(
                         task_name=task.name,
@@ -88,8 +105,11 @@ class ScenarioRunner:
             print(f"[runner] cleanup: {task.name}", flush=True)
             try:
                 await task.cleanup(ctx)
-            except Exception as exc:
-                print(f"[runner] cleanup error ({task.name}): {exc}", flush=True)
+            except Exception:
+                print(
+                    f"[runner] cleanup FAILED: {task.name}\n{traceback.format_exc()}",
+                    flush=True,
+                )
 
         assertion_results = evaluate_all_assertions(assertions, shared_state)
         status = "FAIL" if run_failed else compute_run_status(task_results, assertion_results)

@@ -10,6 +10,12 @@ from harness.tasks.registry import REGISTRY
 _DEBOUNCE_SECS = 0.1
 
 
+def _redact(token: str) -> str:
+    if not token:
+        return "(empty)"
+    return token[:8] + "****" if len(token) > 8 else "****"
+
+
 def _distribute(total: int, n_keys: int) -> list[int]:
     """Return per-key request counts: floor(total/n_keys) each, remainder to first."""
     base = total // n_keys
@@ -40,17 +46,25 @@ class SendRequestsTask(Task):
         count = int(self.params.get("count", 10))
         concurrency = int(self.params.get("concurrency", 5))
         prompt = str(self.params.get("prompt", "Hello"))
-        model = str(
-            self.params.get("model") or ctx.config.get("DEFAULT_MODEL", "granite-3-8b-instruct")
-        )
 
-        url, token = await self._resolve_url_and_token(ctx)
+        url, model, token = await self._resolve_url_model_and_token(ctx)
         key_pool = self._resolve_key_pool(ctx)
 
         if key_pool:
             clients = [AsyncOpenAI(api_key=k, base_url=url) for k in key_pool]
+            print(
+                f"[send_requests] base_url={url} model={model} "
+                f"keys=[{', '.join(_redact(k) for k in key_pool)}] "
+                f"count={count} concurrency={concurrency}",
+                flush=True,
+            )
         else:
             clients = [AsyncOpenAI(api_key=token, base_url=url)]
+            print(
+                f"[send_requests] base_url={url} model={model} "
+                f"token={_redact(token)} count={count} concurrency={concurrency}",
+                flush=True,
+            )
 
         latencies: list[float] = []
         success = 0
@@ -70,8 +84,9 @@ class SendRequestsTask(Task):
                         messages=[{"role": "user", "content": prompt}],
                     )
                     success += 1
-                except Exception:
+                except Exception as exc:
                     fail += 1
+                    print(f"[send_requests] request failed: {exc}", flush=True)
 
                 latencies.append((time.monotonic() - t0) * 1000)
                 total = success + fail
@@ -107,32 +122,74 @@ class SendRequestsTask(Task):
             duration_ms=(time.monotonic() - start) * 1000,
         )
 
-    async def _resolve_url_and_token(self, ctx: TaskContext) -> tuple[str, str]:
+    async def _resolve_url_model_and_token(self, ctx: TaskContext) -> tuple[str, str, str]:
         url = self.params.get("url") or ctx.shared_state.get("url")
         token = self.params.get("token") or ctx.shared_state.get("token") or ctx.sa_token
-        if not url:
-            url = await self._discover_model_url(ctx)
-        return str(url), str(token)
+        default_model = str(
+            self.params.get("model") or ctx.config.get("DEFAULT_MODEL", "granite-3-8b-instruct")
+        )
+        if url:
+            return str(url), default_model, str(token)
+        base_url, resolved_model = await self._discover_model(ctx, default_model)
+        return base_url, resolved_model, str(token)
 
-    async def _discover_model_url(self, ctx: TaskContext) -> str:
+    async def _discover_model(self, ctx: TaskContext, want: str) -> tuple[str, str]:
+        """Return (base_url, model_id) by querying /v1/models.
+
+        Matches want against m['id'] or m['modelDetails']['displayName'].
+        Falls through to first available if no match.
+        The returned model_id is always the canonical m['id'] from the discovery
+        response, not the want string — ensures the inference call uses the ID
+        the endpoint actually recognises.
+        """
         import httpx
 
-        model = str(
-            self.params.get("model") or ctx.config.get("DEFAULT_MODEL", "granite-3-8b-instruct")
+        discovery_url = f"{ctx.maas_api_url}/v1/models"
+        print(
+            f"[send_requests] GET {discovery_url} (token={_redact(ctx.sa_token)})",
+            flush=True,
         )
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{ctx.maas_api_url}/v1/models",
+                discovery_url,
                 headers={"Authorization": f"Bearer {ctx.sa_token}"},
             )
             resp.raise_for_status()
             data = resp.json()
+
+        print(f"[send_requests] discovery response: {data}", flush=True)
+
+        def _base(url: str) -> str:
+            b = url.rstrip("/")
+            return b if b.endswith("/v1") else f"{b}/v1"
+
         for m in data.get("data", []):
-            if m["id"] == model:
-                return f"{m['url']}/v1/chat/completions"
+            display = (m.get("modelDetails") or {}).get("displayName", "")
+            if m["id"] == want or display == want:
+                base = _base(m["url"])
+                print(
+                    f"[send_requests] matched model id={m['id']} display={display!r} "
+                    f"base_url={base}",
+                    flush=True,
+                )
+                return base, m["id"]
+
         if data.get("data"):
-            return f"{data['data'][0]['url']}/v1/chat/completions"
-        return f"{ctx.maas_api_url}/v1/chat/completions"
+            first = data["data"][0]
+            base = _base(first["url"])
+            print(
+                f"[send_requests] {want!r} not matched; using first available "
+                f"id={first['id']} base_url={base}",
+                flush=True,
+            )
+            return base, first["id"]
+
+        fallback = f"{ctx.maas_api_url}/v1"
+        print(
+            f"[send_requests] no models in discovery response; falling back to {fallback} model={want}",
+            flush=True,
+        )
+        return fallback, want
 
     def _resolve_key_pool(self, ctx: TaskContext) -> list[str]:
         if not self.params.get("key_pool"):

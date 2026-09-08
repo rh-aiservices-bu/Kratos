@@ -1,4 +1,5 @@
 import time
+import traceback
 
 from kubernetes import client as k8s_client
 
@@ -107,8 +108,11 @@ class ApplyRateLimitSubscriptionTask(Task):
                     body=original,
                 )
                 print(f"[apply_rate_limit_subscription] restored {sub_name}", flush=True)
-        except Exception as exc:
-            print(f"[apply_rate_limit_subscription] cleanup warning: {exc}", flush=True)
+        except Exception:
+            print(
+                f"[apply_rate_limit_subscription] cleanup FAILED\n{traceback.format_exc()}",
+                flush=True,
+            )
 
 
 REGISTRY["apply_rate_limit_subscription"] = ApplyRateLimitSubscriptionTask
