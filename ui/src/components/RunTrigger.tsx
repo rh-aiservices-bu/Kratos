@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Modal, ModalBody, ModalFooter, ModalHeader } from '@patternfly/react-core';
+import { Button, Modal } from '@patternfly/react-core';
 import { createRun, type Scenario } from '../api/client';
 
 interface Props {
@@ -22,20 +22,29 @@ export function RunTrigger({ scenario, onConfirm, onCancel }: Props) {
   }
 
   return (
-    <Modal isOpen aria-label={`Run ${scenario.name}`} onClose={onCancel} variant="small">
-      <ModalHeader title={`Run scenario: ${scenario.name}`} />
-      <ModalBody>
-        <p>{scenario.description}</p>
-        <p>Start a new run of this scenario?</p>
-      </ModalBody>
-      <ModalFooter>
-        <Button variant="primary" onClick={() => void handleConfirm()} isLoading={loading} isDisabled={loading}>
+    <Modal
+      isOpen
+      onClose={onCancel}
+      aria-label={`Run ${scenario.name}`}
+      title={`Run scenario: ${scenario.name}`}
+      variant="small"
+      actions={[
+        <Button
+          key="confirm"
+          variant="primary"
+          onClick={() => void handleConfirm()}
+          isLoading={loading}
+          isDisabled={loading}
+        >
           Confirm
-        </Button>
-        <Button variant="link" onClick={onCancel} isDisabled={loading}>
+        </Button>,
+        <Button key="cancel" variant="link" onClick={onCancel} isDisabled={loading}>
           Cancel
-        </Button>
-      </ModalFooter>
+        </Button>,
+      ]}
+    >
+      <p>{scenario.description}</p>
+      <p>Start a new run of this scenario?</p>
     </Modal>
   );
 }

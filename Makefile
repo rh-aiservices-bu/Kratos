@@ -13,7 +13,7 @@ test:
 	cd ui && npm test
 
 build:
-	podman build -t $(IMAGE) .
+	podman build --platform linux/amd64 -t $(IMAGE) .
 
 push: build
 	podman push $(IMAGE)
