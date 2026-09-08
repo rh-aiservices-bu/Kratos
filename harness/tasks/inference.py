@@ -410,7 +410,7 @@ class GuideLLMBenchmarkTask(Task):
         try:
             backend = (
                 f"kind=openai_http,target={url},api_key={api_key}"
-                f",model={model},request_format=/v1/chat/completions"
+                f",model={model},request_format=/v1/chat/completions,validate_backend=false"
             )
 
             seed_args: list[str] = []
