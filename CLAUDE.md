@@ -9,19 +9,19 @@ Tests are composed of atomic **tasks** (e.g., provision API key, send inference 
 ## Architecture Overview
 
 ```
-                  Browser UI (React + TypeScript + PatternFly)
-                  - Pick scenario, start run
-                  - Live log streaming (SSE)
+                  Browser UI (React + TypeScript + PatternFly 5)
+                  - Pick scenario, override config params, start run
+                  - Live log polling (REST, 1s interval)
                   - Live assertion status panel
-                  - Results history
+                  - Results history + per-run detail view
                           |
                   FastAPI Backend (Deployment)
                   - Serve UI static files
                   - GET  /api/scenarios
-                  - POST /api/runs
+                  - POST /api/runs  (accepts config_overrides)
                   - GET  /api/runs, /api/runs/{id}
-                  - GET  /api/runs/{id}/logs  (SSE)
-                  - Creates K8s Jobs, watches pod logs
+                  - GET  /api/runs/{id}/logs/lines?offset=N  (REST poll)
+                  - Creates K8s Jobs, captures pod logs to PVC
                   - SQLite run history on PVC
                           |
                   Kubernetes Job (one per run)
@@ -72,22 +72,24 @@ kratos/
 │   ├── __init__.py
 │   ├── main.py                 # FastAPI app, mounts static UI
 │   ├── db.py                   # SQLite setup (aiosqlite)
-│   ├── k8s.py                  # Create/watch Jobs via kubernetes Python client
+│   ├── k8s.py                  # Create Jobs; background thread log capture to PVC; REST log reading
 │   └── routes/
-│       ├── scenarios.py        # GET /api/scenarios
-│       ├── runs.py             # POST /api/runs, GET /api/runs, GET /api/runs/{id}
-│       └── logs.py             # GET /api/runs/{id}/logs  (SSE, streams pod logs)
+│       ├── scenarios.py        # GET /api/scenarios (includes config defaults from YAML)
+│       ├── runs.py             # POST /api/runs (config_overrides), GET /api/runs, GET /api/runs/{id}
+│       └── logs.py             # GET /api/runs/{id}/logs/lines?offset=N  (REST poll, no SSE)
 │
-├── ui/                         # Frontend (React + TypeScript + PatternFly; built to ui/dist/)
+├── ui/                         # Frontend (React + TypeScript + PatternFly 5; built to ui/dist/)
 │   ├── src/
-│   │   ├── App.tsx             # Top-level layout: nav, scenario list, run history tabs
+│   │   ├── App.tsx             # Top-level layout: view state routing (home | run detail), Kratos masthead
 │   │   ├── api/client.ts       # Typed fetch wrappers for all backend API routes
+│   │   ├── styles/theme.css    # Kratos/God of War dark theme: dark header, red accents, card styles
 │   │   └── components/
-│   │       ├── ScenarioList.tsx    # PatternFly list of scenarios with Run button
-│   │       ├── RunTrigger.tsx      # Confirm + start a run
-│   │       ├── LogStream.tsx       # EventSource consumer, scrolling CodeBlock
-│   │       ├── AssertionPanel.tsx  # Live assertion status (Passing/Failing/Pending)
-│   │       └── RunHistory.tsx      # PatternFly Table of past runs
+│   │       ├── ScenarioList.tsx    # Compact scenario cards with Run button; error/retry state
+│   │       ├── RunTrigger.tsx      # Config override editor (pre-filled from YAML defaults) + launch modal
+│   │       ├── LogStream.tsx       # REST poll consumer (1s interval), scrolling CodeBlock, stream status pill
+│   │       ├── AssertionPanel.tsx  # Live assertion cards (Passing/Failing/Pending) with value + expression
+│   │       ├── RunHistory.tsx      # PatternFly Table of past runs; color-coded status badges; 3s poll while active
+│   │       └── RunDetail.tsx       # Per-run detail page: metadata bar, logs + assertions side-by-side, back button
 │   ├── package.json
 │   └── tsconfig.json
 │
@@ -128,10 +130,10 @@ class Task(ABC):
 ```
 - `TaskContext` carries: `maas_api_url`, `sa_token`, `shared_state: dict`, resolved config, and an `emit_assertion_state()` helper
 - `shared_state` is how tasks pass data forward — e.g. `provision_api_key` writes created key IDs into `shared_state["api_keys"]`; the cleanup reads and deletes them all
-- `emit_assertion_state(ctx)` is called by tasks after every atomic operation that produces metric data (e.g. after each inference request in `send_requests`). It re-evaluates all assertions against the current `shared_state` and emits the result as a structured SSE event. Emission is debounced (at most every 100ms) to avoid flooding the channel at high request rates. Tasks without rolling metrics call it once on completion.
+- `emit_assertion_state(ctx)` is called by tasks after every atomic operation that produces metric data (e.g. after each inference request in `send_requests`). It re-evaluates all assertions against the current `shared_state` and prints a structured JSON event to stdout (picked up by the log capture thread). Emission is debounced (at most every 100ms) to avoid flooding the log at high request rates. Tasks without rolling metrics call it once on completion.
 - **Cleanup runs after ALL tasks complete (or fail) — not per-task.** This is intentional: lets you observe the effect of many accumulated keys/resources before cleanup
 
-### Tiered Config (two-level merge)
+### Tiered Config (three-level merge, lowest → highest precedence)
 
 1. **Global ConfigMap** (`configmap-global.yaml`): cluster-level defaults, injected as env vars into every Job
    ```yaml
@@ -147,6 +149,12 @@ class Task(ABC):
      concurrency: 10
      prompt: "Summarize this in one sentence."
    ```
+
+3. **`KRATOS_CONFIG_OVERRIDES`** env var: JSON dict injected into the Job by the API server, carrying values the user edited in the UI before launching the run. Applied at highest precedence — overrides both global ConfigMap and scenario YAML defaults.
+   ```json
+   {"request_count": 50, "concurrency": 2}
+   ```
+   `harness/config.py` reads this via `json.loads(os.environ.get("KRATOS_CONFIG_OVERRIDES", "{}"))`. The UI pre-fills the editor with YAML `config:` defaults so users see reasonable starting values.
 
 ### Scenario YAML Format
 ```yaml
@@ -174,19 +182,27 @@ cleanup: automatic
 ```
 
 ### Assertions
-- Evaluated continuously within tasks — after every atomic operation that produces new metric data (e.g. after every individual inference request in `send_requests`). Assertion state is streamed to the UI via SSE after each operation, not deferred to task or run completion. Emission is debounced to avoid flooding the SSE channel at high request rates.
+- Evaluated continuously within tasks — after every atomic operation that produces new metric data (e.g. after every individual inference request in `send_requests`). Assertion state is written to the run log as a JSON line `{"event":"assertion_state","data":[...]}` and picked up by the frontend's log poll loop, not delivered via SSE. Emission is debounced to avoid flooding the log at high request rates.
 - Format: `metric_name: "<operator> <value>"` (operators: `<`, `>`, `<=`, `>=`, `==`)
 - Available metrics from `send_requests`: `error_rate_pct`, `p50/p95/p99_latency_ms`, `throughput_rps`, `total_requests`, `success_count`, `fail_count`
 - Available metrics from `check_maas_metrics`: `total_requests`, `total_tokens` (more TBD)
 - Run is PASS only if all assertions pass (or no assertions defined)
 
 ### Results Storage
-- SQLite on PVC at `/data/kratos.db` (tables: `runs`, `task_results`)
+- SQLite on PVC at `/data/kratos.db` (tables: `runs`, `task_results`; `runs` has a `config_overrides TEXT` column)
 - Run results JSON also written to `/data/results/<run-id>.json`
+- Pod logs persisted to PVC at `/data/logs/<run-id>.log` (see Log Streaming below)
 
-### Log Streaming
-- API server tails pod logs via `kubernetes` Python client → SSE to browser
-- UI reconnects automatically if SSE drops
+### Log Streaming (REST polling — no SSE)
+SSE was removed because HAProxy (OpenShift edge-terminated Routes) buffers response bodies until the connection closes, making live streaming impossible without cluster-level proxy config changes.
+
+Current approach:
+- When the frontend first polls `/api/runs/{id}/logs/lines`, `ensure_log_capture(run_id)` starts a background daemon thread (`_capture_logs`) if one isn't already running.
+- `_capture_logs` waits up to 60 s for the Job pod to appear (polling every 2 s), then streams pod logs via the `kubernetes` Python client (`read_namespaced_pod_log(follow=True, _preload_content=False)`) and writes each line to `/data/logs/<run-id>.log.tmp`, flushing after every line.
+- When the stream ends (pod exits), the thread atomically renames `.log.tmp` → `.log`. The `.log` file signals "done" to readers.
+- `get_log_lines(run_id, offset)` reads from `.log` (done=True) if it exists, otherwise from `.log.tmp` (done=False). Returns `(new_lines[offset:], done)`.
+- The frontend polls `/api/runs/{id}/logs/lines?offset=N` every 1 s, accumulates lines, and advances the offset. It parses assertion JSON events inline and routes them to the `AssertionPanel`. Polling stops when `done=true`.
+- Log files survive pod deletion (TTL cleanup, OCP GC) since they live on the shared PVC.
 
 ### Cleanup
 - Every task's `cleanup()` runs after the full scenario regardless of pass/fail
@@ -227,7 +243,6 @@ cleanup: automatic
 
 - **Historic metadata testing**: Pre-populate metrics store with backdated requests to simulate a year of data. Needs research into Prometheus remote-write or MaaS-specific APIs. **Requires cluster admin** — writing backdated data directly to the metrics store is not possible with rhoai-admin alone.
 - **Per-user auth**: Inherit the permissions of the UI user (OIDC token passthrough) instead of always using the SA token.
-- **Scenario config in UI**: Let users tweak per-scenario params (request count, concurrency) from the browser without editing YAML.
 - **Group limit probing**: How many groups can a user have in a subscription? Scenario that probes this limit.
 - **External model enumeration**: How many external models can a subscription have? Scenario that validates external model routes (OpenAI/Bedrock/Gemini) through the MaaS gateway.
 
@@ -241,8 +256,8 @@ See [`docs/project/implementation-plan.md`](docs/project/implementation-plan.md)
 | 1 | Harness core: Task ABC, `emit_assertion_state()`, config loader, assertion evaluator, ScenarioRunner |
 | 2 | Task implementations: `auth.py`, `inference.py`, `metrics.py` (stub), `subscription.py` |
 | 3 | Scenario YAMLs: all five scenarios with schema validation |
-| 4 | API server: FastAPI routes, SQLite, K8s job management, SSE log streaming |
-| 5 | Frontend: React + PatternFly UI with live assertion panel and run history |
+| 4 | API server: FastAPI routes, SQLite, K8s job management, REST log polling |
+| 5 | Frontend: React + PatternFly 5 UI — Kratos theme, scenario config editor, run detail page, live assertion panel, run history |
 | 6 | Containerization: multi-stage Dockerfile, all deploy manifests, finalized Makefile |
 | 7 | Integration & E2E testing on a live RHOAI cluster |
 | 8 | CI/CD: lint + unit test + build on PRs; image push on release tags |
@@ -254,4 +269,4 @@ See [`docs/project/implementation-plan.md`](docs/project/implementation-plan.md)
 2. **Local harness**: `python -m harness.main --scenario single_key_load --run-id test-123` (needs real MaaS cluster env vars)
 3. **Local dev**: `make dev` — starts FastAPI dev server + Vite dev server; open browser, verify scenario list loads and assertion panel renders
 4. **Build**: `make build` — multi-stage Docker build (Node UI build → Python image)
-5. **End-to-end**: `make deploy` (`oc apply -k deploy/`) → open Route URL → trigger run → confirm live logs stream, assertion panel updates in real-time → verify results in history → verify no leftover `kratos-*` MaaS API keys → verify `MaaSSubscription` CR state restored after `rate_limit_validation`
+5. **End-to-end**: `make deploy` (`oc apply -k deploy/`) → open Route URL → pick scenario → edit config overrides in modal → start run → confirm logs appear within ~2 s and assertion panel updates in real-time → click "View" to open run detail page → verify results in history → verify no leftover `kratos-*` MaaS API keys → verify `MaaSSubscription` CR state restored after `rate_limit_validation`

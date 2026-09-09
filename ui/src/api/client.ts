@@ -49,6 +49,3 @@ export async function getRun(runId: string): Promise<Run> {
   return r.json() as Promise<Run>;
 }
 
-export function openLogStream(runId: string): EventSource {
-  return new EventSource(`/api/runs/${runId}/logs`);
-}

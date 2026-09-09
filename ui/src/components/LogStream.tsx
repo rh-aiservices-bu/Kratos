@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { CodeBlock, CodeBlockCode } from '@patternfly/react-core';
-import { openLogStream } from '../api/client';
 
 export interface AssertionState {
   name: string;
@@ -18,9 +17,29 @@ const STATUS_LABEL: Record<StreamStatus, string> = {
   error: 'Error',
 };
 
+const POLL_INTERVAL_MS = 1000;
+
+interface LogPollResponse {
+  lines: string[];
+  done: boolean;
+  next_offset: number;
+}
+
 interface Props {
   runId: string;
   onAssertionUpdate: (assertions: AssertionState[]) => void;
+}
+
+function isAssertionEvent(line: string): AssertionState[] | null {
+  try {
+    const parsed = JSON.parse(line) as { event?: string; data?: AssertionState[] };
+    if (parsed.event === 'assertion_state' && Array.isArray(parsed.data)) {
+      return parsed.data;
+    }
+  } catch {
+    // not JSON
+  }
+  return null;
 }
 
 export function LogStream({ runId, onAssertionUpdate }: Props) {
@@ -31,38 +50,57 @@ export function LogStream({ runId, onAssertionUpdate }: Props) {
   useEffect(() => {
     setLines([]);
     setStatus('connecting');
-    const es = openLogStream(runId);
 
-    es.onopen = () => setStatus('streaming');
+    let active = true;
+    let offset = 0;
 
-    es.onmessage = (ev) => {
-      const raw: string = ev.data;
-      try {
-        const parsed = JSON.parse(raw) as { event?: string; data?: AssertionState[] };
-        if (parsed.event === 'assertion_state' && Array.isArray(parsed.data)) {
-          onAssertionUpdate(parsed.data);
+    async function poll() {
+      while (active) {
+        try {
+          const res = await fetch(`/api/runs/${runId}/logs/lines?offset=${offset}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+          const data = (await res.json()) as LogPollResponse;
+
+          if (data.lines.length > 0) {
+            setStatus('streaming');
+
+            const logLines: string[] = [];
+            for (const line of data.lines) {
+              const assertions = isAssertionEvent(line);
+              if (assertions) {
+                onAssertionUpdate(assertions);
+              } else {
+                logLines.push(line);
+              }
+            }
+            if (logLines.length > 0) {
+              setLines((prev) => [...prev, ...logLines]);
+            }
+
+            offset = data.next_offset;
+          }
+
+          if (data.done) {
+            setStatus('completed');
+            return;
+          }
+        } catch {
+          setStatus('error');
           return;
         }
-        if (parsed.event === 'done') {
-          setStatus('completed');
-          return;
-        }
-      } catch {
-        // not JSON — plain log line
+
+        await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS));
       }
-      setStatus((prev) => (prev === 'connecting' ? 'streaming' : prev));
-      setLines((prev) => [...prev, raw]);
-    };
+    }
 
-    es.onerror = () => {
-      es.close();
-      setStatus((prev) => (prev === 'streaming' ? 'completed' : 'error'));
+    void poll();
+    return () => {
+      active = false;
     };
-
-    return () => { es.close(); };
   }, [runId, onAssertionUpdate]);
 
-  // Scroll within the container only — never touch window scroll position.
+  // Scroll within the log box only — never touch window scroll.
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
