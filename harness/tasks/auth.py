@@ -49,6 +49,7 @@ class ProvisionApiKeyTask(Task):
                 ctx.shared_state.setdefault("api_keys", []).append(
                     {"id": data["id"], "key": data["key"]}
                 )
+                ctx.shared_state["task_progress"] = {"current": i + 1, "total": count}
                 await ctx.emit_assertion_state()
 
         return TaskResult(

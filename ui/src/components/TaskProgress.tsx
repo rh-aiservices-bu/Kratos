@@ -42,8 +42,10 @@ export function TaskProgress({ runId }: Props) {
         const color = STATUS_COLOR[task.status];
         const isRunning = task.status === 'RUNNING';
         const pct =
-          isRunning && task.progress && task.progress.total > 0
-            ? Math.round((task.progress.current / task.progress.total) * 100)
+          task.progress && task.progress.total > 0
+            ? task.status === 'DONE'
+              ? 100
+              : Math.round((task.progress.current / task.progress.total) * 100)
             : null;
 
         return (
@@ -53,11 +55,11 @@ export function TaskProgress({ runId }: Props) {
               className={`kratos-task-chip kratos-task-chip--${task.status.toLowerCase()}`}
               style={{ '--task-color': color } as React.CSSProperties}
             >
-              <span
-                className={`kratos-task-chip__icon${isRunning ? ' kratos-task-chip__icon--spin' : ''}`}
-              >
-                {STATUS_ICON[task.status]}
-              </span>
+              {isRunning ? (
+                <span className="kratos-task-chip__spinner" />
+              ) : (
+                <span className="kratos-task-chip__icon">{STATUS_ICON[task.status]}</span>
+              )}
               <span className="kratos-task-chip__name">{formatTaskName(task.name)}</span>
               {pct !== null && (
                 <div className="kratos-task-chip__progress-wrap">

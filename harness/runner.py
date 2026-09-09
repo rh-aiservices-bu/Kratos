@@ -63,12 +63,18 @@ class ScenarioRunner:
             except OSError as exc:
                 print(f"[runner] could not write assertions: {exc}", flush=True)
 
+        task_completed_progress: dict[str, dict] = {}
+
         def _write_progress(current_idx: int, completed: list[TaskResult]) -> None:
             """Write current task progress to the dedicated PVC file."""
             task_list = []
             for i, task in enumerate(tasks):
                 if i < len(completed):
-                    task_list.append({"name": task.name, "status": completed[i].status})
+                    entry: dict = {"name": task.name, "status": completed[i].status}
+                    cp = task_completed_progress.get(task.name)
+                    if cp:
+                        entry["progress"] = cp
+                    task_list.append(entry)
                 elif i == current_idx:
                     entry: dict = {"name": task.name, "status": "RUNNING"}
                     tp = shared_state.get("task_progress")
@@ -122,6 +128,9 @@ class ScenarioRunner:
             start = time.monotonic()
             try:
                 result = await task.run(ctx)
+                tp = shared_state.pop("task_progress", None)
+                if tp:
+                    task_completed_progress[task.name] = tp
                 task_results.append(result)
                 if result.status == "FAIL":
                     run_failed = True
@@ -132,6 +141,9 @@ class ScenarioRunner:
                     f"[runner] task FAILED: {task.name}\n{traceback.format_exc()}",
                     flush=True,
                 )
+                tp = shared_state.pop("task_progress", None)
+                if tp:
+                    task_completed_progress[task.name] = tp
                 task_results.append(
                     TaskResult(
                         task_name=task.name,
