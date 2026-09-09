@@ -3,6 +3,14 @@ kind: Route
 metadata:
   name: kratos
   namespace: kratos
+  annotations:
+    # Disable HAProxy's backend timeout so long-lived SSE connections
+    # (log streaming) are not killed after the default 30 s idle period.
+    haproxy.router.openshift.io/timeout: 0
+    # Tell HAProxy not to buffer the response body.  Without this, HAProxy
+    # holds chunks until its internal buffer fills up, which means SSE log
+    # lines are never delivered until the connection closes.
+    haproxy.router.openshift.io/proxy-buffer-size: 0s
 spec:
   to:
     kind: Service
