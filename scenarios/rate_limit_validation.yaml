@@ -20,7 +20,6 @@ tasks:
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
       key_pool: true
-  - name: check_maas_metrics
 assertions:
   throughput_rps: "<= ${config.rate_limit_rps}"
   error_rate_pct: "< 30"

@@ -16,7 +16,6 @@ tasks:
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
       key_pool: true
-  - name: check_maas_metrics
 assertions:
   error_rate_pct: "< 5"
 cleanup: automatic

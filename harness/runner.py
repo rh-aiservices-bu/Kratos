@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import json
 import os
 import time
@@ -70,7 +72,8 @@ class ScenarioRunner:
             task_list = []
             for i, task in enumerate(tasks):
                 if i < len(completed):
-                    entry: dict = {"name": task.name, "status": completed[i].status}
+                    chip_status = "DONE" if completed[i].status == "PASS" else "FAIL"
+                    entry: dict = {"name": task.name, "status": chip_status}
                     cp = task_completed_progress.get(task.name)
                     if cp:
                         entry["progress"] = cp
@@ -99,11 +102,36 @@ class ScenarioRunner:
             _write_assertions(evaluate_all_assertions(assertions, shared_state))
             _write_progress(current_task_idx, task_results)
 
+        sa_token = _read_sa_token(config)
+        metrics_url: str = config.get("MAAS_METRICS_URL", "")
+
+        async def _fetch_metrics_once() -> None:
+            if not metrics_url:
+                return
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=5.0) as c:
+                    r = await c.get(
+                        metrics_url,
+                        headers={"Authorization": f"Bearer {sa_token}"},
+                    )
+                    if r.is_success:
+                        shared_state["metrics"] = r.json()
+            except Exception as exc:
+                print(f"[runner] metrics poll error: {exc}", flush=True)
+
+        async def _metrics_bg() -> None:
+            while True:
+                await _fetch_metrics_once()
+                if shared_state.get("metrics"):
+                    await emit()
+                await asyncio.sleep(5)
+
         ctx = TaskContext(
             run_id=self.run_id,
             scenario_name=scenario_name,
             maas_api_url=config.get("MAAS_API_URL", ""),
-            sa_token=_read_sa_token(config),
+            sa_token=sa_token,
             shared_state=shared_state,
             config=config,
             assertions=assertions,
@@ -120,6 +148,7 @@ class ScenarioRunner:
         run_failed = False
 
         _write_progress(-1, [])
+        metrics_bg = asyncio.create_task(_metrics_bg()) if metrics_url else None
 
         for i, task in enumerate(tasks):
             current_task_idx = i
@@ -164,6 +193,13 @@ class ScenarioRunner:
                     f"[runner] cleanup FAILED: {task.name}\n{traceback.format_exc()}",
                     flush=True,
                 )
+
+        # Stop background metrics poller and do one final fetch for definitive state.
+        if metrics_bg:
+            metrics_bg.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await metrics_bg
+            await _fetch_metrics_once()
 
         assertion_results = evaluate_all_assertions(assertions, shared_state)
         # Final (non-debounced) writes so files reflect the definitive end state.

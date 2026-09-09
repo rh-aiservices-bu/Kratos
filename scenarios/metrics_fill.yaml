@@ -15,7 +15,6 @@ tasks:
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
       key_pool: true
-  - name: check_maas_metrics
 assertions:
   error_rate_pct: "< 5"
   total_requests: ">= ${config.metrics_min_requests}"
