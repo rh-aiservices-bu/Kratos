@@ -156,15 +156,16 @@ def _capture_logs(run_id: str) -> None:
                     pass
 
                 # Read the complete log from the beginning every iteration.
-                # The non-follow endpoint always returns everything written so
-                # far, so appending only the unseen tail is safe.
+                # _preload_content=False gives us the raw urllib3 response so
+                # we can decode the bytes ourselves — the default deserialiser
+                # calls str() on bytes which produces a b"..." repr string.
                 try:
-                    raw = core.read_namespaced_pod_log(
-                        name=pod_name, namespace=NAMESPACE, follow=False
+                    response = core.read_namespaced_pod_log(
+                        name=pod_name, namespace=NAMESPACE,
+                        follow=False, _preload_content=False,
                     )
-                    # The kubernetes client may return bytes or str depending on
-                    # version; always normalise to str before splitting.
-                    text = raw.decode(errors="replace") if isinstance(raw, bytes) else (raw or "")
+                    raw_bytes = response.read()
+                    text = raw_bytes.decode(errors="replace") if raw_bytes else ""
                     all_lines = text.splitlines()
                     for line in all_lines[seen_lines:]:
                         f.write(line + "\n")
