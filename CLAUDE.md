@@ -192,9 +192,18 @@ cleanup: automatic
 ### Assertions
 - Evaluated continuously — after every atomic operation that produces new metric data (e.g. after each inference request in `send_requests`, after each key creation in `provision_api_key`). Result is written to `/data/results/<run-id>-assertions.json` on the PVC. **Not parsed from pod logs** — the log stream is plain text only.
 - Frontend polls `GET /api/runs/{id}/assertions` every 2s independently of the log poll.
-- Format: `metric_name: "<operator> <value>"` (operators: `<`, `>`, `<=`, `>=`, `==`)
-- Available metrics from `send_requests` (via `shared_state["inference_results"]`): `error_rate_pct`, `p50/p95/p99_latency_ms`, `throughput_rps`, `total_requests`, `success_count`, `fail_count`
-- Available metrics from background MaaS metrics poller (via `shared_state["metrics"]`): `total_requests`, `total_tokens` (requires `MAAS_METRICS_URL` in global ConfigMap)
+- Simple form: `metric_name: "<operator> <value>"` (operators: `<`, `>`, `<=`, `>=`, `==`)
+- Match form (MaaS-vs-harness cross-check, see ADR-014): compares two live metrics to each other within a tolerance band instead of against a constant:
+  ```yaml
+  assertions:
+    maas_requests_match:
+      compare: metrics.total_requests_delta
+      to: inference_results.total_requests
+      tolerance_pct: 5
+  ```
+  `compare`/`to` are explicit `namespace.key` references. PASSING if `abs(observed - expected) <= tolerance_pct/100 * max(abs(expected), 1)`; PENDING if either side isn't populated yet.
+- Available metrics from `send_requests` (via `shared_state["inference_results"]`): `error_rate_pct`, `p50/p95/p99_latency_ms`, `throughput_rps`, `total_requests`, `success_count`, `fail_count`, `total_tokens_sent`, `prompt_tokens_sent`, `completion_tokens_sent`
+- Available metrics from background MaaS metrics poller (via `shared_state["metrics"]`): raw values as reported by the configured Prometheus queries (e.g. `total_requests`, `total_tokens`), plus `{name}_delta` for each (value minus the run's baseline snapshot — see Background Metrics Polling below). Requires `MAAS_METRICS_URL` and `MAAS_METRICS_QUERIES` in the global ConfigMap.
 - Run is PASS only if all assertions pass (or no assertions defined)
 
 ### Results Storage
@@ -235,13 +244,15 @@ Current approach:
 
 - **`send_requests`**: Sends concurrent OpenAI-compatible inference requests. Resolves `url` and `token` via a three-level priority chain: (1) explicit YAML `params`, (2) `shared_state`, (3) `TaskContext` defaults (MaaS model discovery + SA token). When `key_pool: true` is set, uses keys from `shared_state["api_keys"]` and distributes requests evenly across the pool (floor(M/N) per key, remainder to first). After every completed request, updates `shared_state["inference_results"]` (latency, error count, throughput) and `shared_state["task_progress"]`, then calls `emit_assertion_state()`. Cleanup is a no-op.
 
-- **`check_maas_metrics`**: Reads the RHOAI/MaaS metrics endpoint (`MAAS_METRICS_URL` config), stores raw values in `shared_state["metrics"]` for assertion evaluation, and prints a human-readable summary to the run log. **This task class is available for explicit use but is no longer included in standard scenario task lists.** MaaS metrics are now polled automatically in the background by `ScenarioRunner` (see Background Metrics Polling below).
+- **`check_maas_metrics`**: Optional explicit final metrics check. Runs the same configured Prometheus queries as the background poller (via the shared `harness/metrics_client.py`), stores raw values in `shared_state["metrics"]`, and prints a human-readable summary to the run log. **This task class is available for explicit use but is no longer included in standard scenario task lists.** MaaS metrics are polled automatically in the background by `ScenarioRunner` (see Background Metrics Polling below).
 
 - **`apply_rate_limit_subscription`**: Uses `kubernetes.client.CustomObjectsApi` to create or patch a `MaaSSubscription` CR (`maas.opendatahub.io/v1alpha1`) with a configured `rps_limit`. Stores the original subscription state in `shared_state["original_subscription"]` for cleanup. Cleanup restores or deletes the CR as appropriate.
 
 ### Background Metrics Polling
 
-`ScenarioRunner.run()` starts an asyncio background task (`_metrics_bg`) at the beginning of every run when `MAAS_METRICS_URL` is set in the global ConfigMap. It polls the metrics endpoint every 5 s, writes the result into `shared_state["metrics"]`, and calls `emit()` to trigger an assertion re-evaluation. This means assertions on `total_requests`, `total_tokens`, etc. update live in the AssertionPanel throughout the run — not just at the end.
+MaaS/RHOAI metrics are read from Prometheus/Thanos Querier's instant-query API (`GET {MAAS_METRICS_URL}?query=<promql>`), not a MaaS-specific REST endpoint — see ADR-014 for why, and the SA RBAC (`deploy/rbac-monitoring.yaml`, `cluster-monitoring-view`) this requires. `MAAS_METRICS_QUERIES` (a JSON dict of `{name: promql}` in the global ConfigMap) names which PromQL queries to run; both it and `MAAS_METRICS_URL` are TBD until confirmed on a live cluster (see the metrics research checklist in `docs/project/implementation-plan.md`) — the poller and `check_maas_metrics` task both no-op until they're set.
+
+`ScenarioRunner.run()` takes one metrics snapshot immediately before the task loop starts and stores it as `shared_state["metrics_baseline"]`. It then starts an asyncio background task (`_metrics_bg`) that polls every 5 s, writes the raw current values into `shared_state["metrics"]`, computes `{name}_delta = current - baseline` for each metric present in both, and calls `emit()` to trigger an assertion re-evaluation. The delta — not the raw value — is what should be compared against harness-known sent counts, since the underlying Prometheus counter may be cumulative/scoped beyond a single run rather than zeroed per run.
 
 After the main task loop and cleanup complete, the background task is cancelled and one final definitive fetch is done before writing the final assertion state.
 

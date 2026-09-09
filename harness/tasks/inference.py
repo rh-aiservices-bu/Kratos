@@ -69,6 +69,9 @@ class SendRequestsTask(Task):
         latencies: list[float] = []
         success = 0
         fail = 0
+        total_tokens_sent = 0
+        prompt_tokens_sent = 0
+        completion_tokens_sent = 0
         run_start = time.monotonic()
         last_emit = 0.0
 
@@ -76,14 +79,25 @@ class SendRequestsTask(Task):
 
         async def do_request(client_idx: int) -> None:
             nonlocal success, fail, last_emit
+            nonlocal total_tokens_sent, prompt_tokens_sent, completion_tokens_sent
             async with sem:
                 t0 = time.monotonic()
                 try:
-                    await clients[client_idx].chat.completions.create(
+                    response = await clients[client_idx].chat.completions.create(
                         model=model,
                         messages=[{"role": "user", "content": prompt}],
                     )
                     success += 1
+                    usage = getattr(response, "usage", None)
+                    tokens = getattr(usage, "total_tokens", None)
+                    if isinstance(tokens, (int, float)):
+                        total_tokens_sent += int(tokens)
+                    prompt_tokens = getattr(usage, "prompt_tokens", None)
+                    if isinstance(prompt_tokens, (int, float)):
+                        prompt_tokens_sent += int(prompt_tokens)
+                    completion_tokens = getattr(usage, "completion_tokens", None)
+                    if isinstance(completion_tokens, (int, float)):
+                        completion_tokens_sent += int(completion_tokens)
                 except Exception as exc:
                     fail += 1
                     print(f"[send_requests] request failed: {exc}", flush=True)
@@ -97,6 +111,9 @@ class SendRequestsTask(Task):
                     "fail_count": fail,
                     "error_rate_pct": (fail / total * 100) if total > 0 else 0.0,
                     "throughput_rps": success / elapsed if elapsed > 0 else 0.0,
+                    "total_tokens_sent": total_tokens_sent,
+                    "prompt_tokens_sent": prompt_tokens_sent,
+                    "completion_tokens_sent": completion_tokens_sent,
                     **_percentiles(latencies),
                 }
                 ctx.shared_state["task_progress"] = {"current": total, "total": count}

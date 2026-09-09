@@ -26,8 +26,10 @@ Supported operators: `<`, `>`, `<=`, `>=`, `==`.
 Assertions are evaluated **continuously within tasks** — after every atomic operation that produces new metric data (e.g. after every individual inference request in `send_requests`). Tasks emit assertion state updates via SSE after each operation. This means the operator sees assertion outcomes updating live as requests are fired, not only at task or run completion. See ADR-013 for the full decision on evaluation granularity and SSE emission debouncing. The final PASS/FAIL verdict is determined after all tasks have completed and the last assertion evaluation has run. Assertion values may reference scenario config params via interpolation (e.g. `"<= ${config.rate_limit_rps}"`).
 
 Available metrics for assertion (populated by task execution):
-- From `send_requests` → `shared_state["inference_results"]`: `error_rate_pct`, `p50_latency_ms`, `p95_latency_ms`, `p99_latency_ms`, `throughput_rps`, `total_requests`, `success_count`, `fail_count`
-- From `check_maas_metrics` → `shared_state["metrics"]`: `metrics_request_count` (and others TBD once the metrics endpoint is finalized)
+- From `send_requests` → `shared_state["inference_results"]`: `error_rate_pct`, `p50_latency_ms`, `p95_latency_ms`, `p99_latency_ms`, `throughput_rps`, `total_requests`, `success_count`, `fail_count`, `total_tokens_sent`, `prompt_tokens_sent`, `completion_tokens_sent`
+- From the background MaaS metrics poller → `shared_state["metrics"]`: `total_requests`, `total_tokens` (raw, as reported by the configured Prometheus queries) and `total_requests_delta`, `total_tokens_delta` (relative to the run's baseline snapshot)
+
+A second, structured assertion form supports comparing two live metrics to each other with a tolerance band — see ADR-014 for the format and rationale (`compare`/`to`/`tolerance_pct`).
 
 ## Consequences
 

@@ -1,40 +1,38 @@
 import time
-import traceback
 
-import httpx
-
+from harness.metrics_client import fetch_metrics, parse_queries
 from harness.result import TaskResult
 from harness.tasks.base import Task, TaskContext
 from harness.tasks.registry import REGISTRY
 
 
 class CheckMaasMetricsTask(Task):
+    """Optional explicit final metrics check with a printed summary.
+
+    Standard scenarios no longer include this task — MaaS metrics are polled
+    continuously in the background by ScenarioRunner (see harness/runner.py).
+    This task remains available for scenarios that want an explicit final
+    check plus a human-readable log summary.
+    """
+
     async def run(self, ctx: TaskContext) -> TaskResult:
         start = time.monotonic()
 
-        metrics_url = self.params.get("metrics_url") or ctx.config.get("MAAS_METRICS_URL")
-        raw: dict = {"total_requests": 0, "total_tokens": 0}
+        metrics_url = self.params.get("metrics_url") or ctx.config.get("MAAS_METRICS_URL", "")
+        queries = parse_queries(
+            self.params.get("queries") or ctx.config.get("MAAS_METRICS_QUERIES", "")
+        )
 
-        if metrics_url:
-            try:
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(
-                        metrics_url,
-                        headers={"Authorization": f"Bearer {ctx.sa_token}"},
-                    )
-                    resp.raise_for_status()
-                    raw.update(resp.json())
-            except Exception:
-                print(
-                    f"[check_maas_metrics] could not fetch metrics\n{traceback.format_exc()}",
-                    flush=True,
-                )
+        if metrics_url and queries:
+            raw = await fetch_metrics(metrics_url, queries, ctx.sa_token)
         else:
             print(
-                "[check_maas_metrics] no metrics URL configured — using stub zeroes", flush=True
+                "[check_maas_metrics] no metrics URL/queries configured — using stub zeroes",
+                flush=True,
             )
+            raw = {"total_requests": 0, "total_tokens": 0}
 
-        ctx.shared_state["metrics"] = raw
+        ctx.shared_state["metrics"] = {**ctx.shared_state.get("metrics", {}), **raw}
 
         print("[check_maas_metrics] --- metrics summary ---", flush=True)
         for key, val in raw.items():

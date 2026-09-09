@@ -1,8 +1,6 @@
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from harness.tasks.base import TaskContext
 from harness.tasks.inference import SendRequestsTask, _distribute, _percentiles
 
@@ -49,6 +47,48 @@ async def test_send_requests_updates_inference_results() -> None:
     assert ir["success_count"] == 3
     assert ir["fail_count"] == 0
     assert ir["error_rate_pct"] == 0.0
+
+
+async def test_send_requests_accumulates_token_usage() -> None:
+    def _response_with_usage(*args, **kwargs) -> MagicMock:
+        r = MagicMock()
+        r.usage.total_tokens = 30
+        r.usage.prompt_tokens = 10
+        r.usage.completion_tokens = 20
+        return r
+
+    with patch("harness.tasks.inference.AsyncOpenAI") as mock_cls:
+        m = MagicMock()
+        m.chat.completions.create = AsyncMock(side_effect=_response_with_usage)
+        mock_cls.return_value = m
+
+        task = SendRequestsTask(
+            "send_requests",
+            {"count": "3", "concurrency": "2", "url": "http://m.test", "token": "sk-t"},
+        )
+        ctx = _make_ctx()
+        await task.run(ctx)
+
+    ir = ctx.shared_state["inference_results"]
+    assert ir["total_tokens_sent"] == 90
+    assert ir["prompt_tokens_sent"] == 30
+    assert ir["completion_tokens_sent"] == 60
+
+
+async def test_send_requests_missing_usage_does_not_crash() -> None:
+    """Responses without a usable .usage.total_tokens (e.g. a bare MagicMock) are treated as 0."""
+    with patch("harness.tasks.inference.AsyncOpenAI") as mock_cls:
+        mock_cls.return_value = _mock_client()  # default MagicMock() response, no real usage
+
+        task = SendRequestsTask(
+            "send_requests",
+            {"count": "2", "concurrency": "2", "url": "http://m.test", "token": "sk-t"},
+        )
+        ctx = _make_ctx()
+        result = await task.run(ctx)
+
+    assert result.status == "PASS"
+    assert ctx.shared_state["inference_results"]["total_tokens_sent"] == 0
 
 
 async def test_send_requests_counts_errors() -> None:

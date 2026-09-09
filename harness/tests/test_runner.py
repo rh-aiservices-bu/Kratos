@@ -170,6 +170,79 @@ def test_assertion_state_progression(tmp_path: Path) -> None:
         REGISTRY.pop("_metric_task", None)
 
 
+def test_metrics_baseline_delta_feeds_match_assertion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Baseline is snapshotted before tasks run; delta = final - baseline feeds a match assertion."""
+    from harness import runner as runner_module
+
+    calls: list[None] = []
+
+    async def fake_fetch_metrics(base_url: str, queries: dict, token: str) -> dict:
+        calls.append(None)
+        # First call (before the task loop starts) is the baseline; every call
+        # after that represents "current" and must stay consistent regardless
+        # of how many background polls happen to interleave.
+        return {"total_requests": 10.0} if len(calls) == 1 else {"total_requests": 55.0}
+
+    monkeypatch.setattr(runner_module, "fetch_metrics", fake_fetch_metrics)
+
+    class _ExpectSentCount(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            ctx.shared_state["inference_results"] = {"total_requests": 45.0}
+            await ctx.emit_assertion_state()
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            pass
+
+    REGISTRY["_expect_sent_count"] = _ExpectSentCount
+
+    try:
+        path = _write(tmp_path, """
+            name: test_metrics_delta
+            config:
+              MAAS_METRICS_URL: "http://thanos.test/api/v1/query"
+              MAAS_METRICS_QUERIES: '{"total_requests": "sum(foo)"}'
+            tasks:
+              - name: _expect_sent_count
+                params: {}
+            assertions:
+              maas_requests_match:
+                compare: metrics.total_requests_delta
+                to: inference_results.total_requests
+                tolerance_pct: 5
+        """)
+        result = asyncio.run(ScenarioRunner(path, "metrics-delta-001").run())
+        assert result.status == "PASS"
+        assertion = {a.name: a for a in result.assertions}["maas_requests_match"]
+        assert assertion.status == "PASSING"
+        assert assertion.current_value == 45.0  # 55 - 10
+        assert assertion.expected_value == 45.0
+    finally:
+        REGISTRY.pop("_expect_sent_count", None)
+
+
+def test_metrics_polling_disabled_without_config(tmp_path: Path) -> None:
+    """No MAAS_METRICS_URL/QUERIES configured: match assertion stays PENDING, run still passes."""
+    path = _write(tmp_path, """
+        name: test_no_metrics
+        config: {}
+        tasks:
+          - name: stub_pass
+            params: {}
+        assertions:
+          maas_requests_match:
+            compare: metrics.total_requests_delta
+            to: inference_results.total_requests
+            tolerance_pct: 5
+    """)
+    result = asyncio.run(ScenarioRunner(path, "no-metrics-001").run())
+    assert result.status == "PASS"
+    assertion = {a.name: a for a in result.assertions}["maas_requests_match"]
+    assert assertion.status == "PENDING"
+
+
 def test_unknown_task_raises(tmp_path: Path) -> None:
     path = _write(tmp_path, """
         name: test_unknown

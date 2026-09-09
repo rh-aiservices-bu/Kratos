@@ -1,0 +1,87 @@
+import httpx
+from pytest_httpx import HTTPXMock
+
+from harness.metrics_client import fetch_metrics, parse_queries
+
+_BASE = "http://thanos.test/api/v1/query"
+
+
+def _q(query: str) -> str:
+    """Build the exact URL httpx will request for a given PromQL query string."""
+    return str(httpx.URL(_BASE, params={"query": query}))
+
+
+def test_parse_queries_valid_json() -> None:
+    assert parse_queries('{"total_requests": "sum(foo)"}') == {"total_requests": "sum(foo)"}
+
+
+def test_parse_queries_empty_string() -> None:
+    assert parse_queries("") == {}
+
+
+def test_parse_queries_invalid_json() -> None:
+    assert parse_queries("not json") == {}
+
+
+def test_parse_queries_non_dict_json() -> None:
+    assert parse_queries("[1, 2, 3]") == {}
+
+
+async def test_fetch_metrics_no_base_url() -> None:
+    assert await fetch_metrics("", {"total_requests": "sum(foo)"}, "token") == {}
+
+
+async def test_fetch_metrics_no_queries() -> None:
+    assert await fetch_metrics(_BASE, {}, "token") == {}
+
+
+async def test_fetch_metrics_single_query_success(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        url=_q("sum(foo)"),
+        json={"data": {"result": [{"metric": {}, "value": [1234567890, "42"]}]}},
+    )
+
+    result = await fetch_metrics(_BASE, {"total_requests": "sum(foo)"}, "token")
+    assert result == {"total_requests": 42.0}
+
+
+async def test_fetch_metrics_multiple_queries(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        url=_q("sum(requests)"), json={"data": {"result": [{"value": [1, "10"]}]}}
+    )
+    httpx_mock.add_response(
+        url=_q("sum(tokens)"), json={"data": {"result": [{"value": [1, "500"]}]}}
+    )
+
+    result = await fetch_metrics(
+        _BASE,
+        {"total_requests": "sum(requests)", "total_tokens": "sum(tokens)"},
+        "token",
+    )
+    assert result == {"total_requests": 10.0, "total_tokens": 500.0}
+
+
+async def test_fetch_metrics_empty_result_omitted(httpx_mock: HTTPXMock) -> None:
+    """A query with no matching series ('result': []) is omitted, not zero-filled."""
+    httpx_mock.add_response(url=_q("sum(nothing)"), json={"data": {"result": []}})
+
+    result = await fetch_metrics(_BASE, {"total_requests": "sum(nothing)"}, "token")
+    assert result == {}
+
+
+async def test_fetch_metrics_http_error_omitted(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(url=_q("sum(foo)"), status_code=500)
+
+    result = await fetch_metrics(_BASE, {"total_requests": "sum(foo)"}, "token")
+    assert result == {}
+
+
+async def test_fetch_metrics_sends_bearer_token(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        url=_q("sum(foo)"), json={"data": {"result": [{"value": [1, "1"]}]}}
+    )
+
+    await fetch_metrics(_BASE, {"total_requests": "sum(foo)"}, "tok-123")
+
+    request = httpx_mock.get_requests()[0]
+    assert request.headers["authorization"] == "Bearer tok-123"

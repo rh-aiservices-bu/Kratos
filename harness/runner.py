@@ -20,6 +20,7 @@ def _read_sa_token(config: dict) -> str:
         return ""
 
 from harness.config import load_scenario
+from harness.metrics_client import fetch_metrics, parse_queries
 from harness.result import (
     RunResult,
     TaskResult,
@@ -30,6 +31,8 @@ from harness.tasks.base import Task, TaskContext
 from harness.tasks.registry import REGISTRY
 
 _EMIT_DEBOUNCE_S = 0.1
+_METRICS_FINAL_MAX_WAIT_S = 40.0
+_METRICS_FINAL_POLL_INTERVAL_S = 5.0
 
 
 class ScenarioRunner:
@@ -42,7 +45,7 @@ class ScenarioRunner:
         scenario = load_scenario(self.scenario_path)
         scenario_name: str = scenario["name"]
         config: dict = scenario.get("_resolved_config", {})
-        assertions: dict[str, str] = scenario.get("assertions") or {}
+        assertions: dict[str, str | dict] = scenario.get("assertions") or {}
         task_defs: list[dict] = scenario.get("tasks") or []
         shared_state: dict = {}
 
@@ -53,6 +56,7 @@ class ScenarioRunner:
                     "name": r.name,
                     "status": r.status,
                     "value": r.current_value,
+                    "expected_value": r.expected_value,
                     "expression": r.expression,
                 }
                 for r in results
@@ -104,21 +108,26 @@ class ScenarioRunner:
 
         sa_token = _read_sa_token(config)
         metrics_url: str = config.get("MAAS_METRICS_URL", "")
+        metrics_queries: dict[str, str] = parse_queries(config.get("MAAS_METRICS_QUERIES", ""))
+        metrics_enabled = bool(metrics_url and metrics_queries)
 
         async def _fetch_metrics_once() -> None:
-            if not metrics_url:
+            if not metrics_enabled:
                 return
             try:
-                import httpx
-                async with httpx.AsyncClient(timeout=5.0) as c:
-                    r = await c.get(
-                        metrics_url,
-                        headers={"Authorization": f"Bearer {sa_token}"},
-                    )
-                    if r.is_success:
-                        shared_state["metrics"] = r.json()
+                raw = await fetch_metrics(metrics_url, metrics_queries, sa_token)
             except Exception as exc:
                 print(f"[runner] metrics poll error: {exc}", flush=True)
+                return
+            if not raw:
+                return
+            baseline = shared_state.get("metrics_baseline") or {}
+            deltas = {
+                f"{key}_delta": value - baseline[key]
+                for key, value in raw.items()
+                if key in baseline
+            }
+            shared_state["metrics"] = {**raw, **deltas}
 
         async def _metrics_bg() -> None:
             while True:
@@ -148,7 +157,12 @@ class ScenarioRunner:
         run_failed = False
 
         _write_progress(-1, [])
-        metrics_bg = asyncio.create_task(_metrics_bg()) if metrics_url else None
+        metrics_bg = None
+        if metrics_enabled:
+            baseline = await fetch_metrics(metrics_url, metrics_queries, sa_token)
+            if baseline:
+                shared_state["metrics_baseline"] = baseline
+            metrics_bg = asyncio.create_task(_metrics_bg())
 
         for i, task in enumerate(tasks):
             current_task_idx = i
@@ -194,12 +208,29 @@ class ScenarioRunner:
                     flush=True,
                 )
 
-        # Stop background metrics poller and do one final fetch for definitive state.
+        # Stop background metrics poller, then fetch a definitive final state. A single
+        # fetch immediately after cleanup can land inside the same Prometheus scrape
+        # interval the run started in — for a scenario that finishes faster than the
+        # scrape interval (commonly ~30s), that reads back as an unchanged baseline
+        # (delta=0) even though the traffic really happened, which a tolerance-band
+        # comparison can't distinguish from "genuinely nothing changed". So retry a
+        # few times, stopping as soon as any metric has moved past its baseline
+        # (evidence a fresh scrape has landed) or a bounded cap is hit.
         if metrics_bg:
             metrics_bg.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await metrics_bg
-            await _fetch_metrics_once()
+            baseline = shared_state.get("metrics_baseline") or {}
+            elapsed = 0.0
+            while elapsed < _METRICS_FINAL_MAX_WAIT_S:
+                await _fetch_metrics_once()
+                current = {
+                    k: v for k, v in shared_state.get("metrics", {}).items() if not k.endswith("_delta")
+                }
+                if any(current.get(k) != baseline.get(k) for k in current):
+                    break
+                await asyncio.sleep(_METRICS_FINAL_POLL_INTERVAL_S)
+                elapsed += _METRICS_FINAL_POLL_INTERVAL_S
 
         assertion_results = evaluate_all_assertions(assertions, shared_state)
         # Final (non-debounced) writes so files reflect the definitive end state.

@@ -71,7 +71,10 @@ export function AssertionPanel({ assertions }: Props) {
               }
             >
               <span className="kratos-assertion-card__name">{formatName(a.name)}</span>
-              <span className="kratos-assertion-card__value">{formatValue(a.value)}</span>
+              <span className="kratos-assertion-card__value">
+                {formatValue(a.value)}
+                {a.expected_value != null && ` vs. expected ${formatValue(a.expected_value)}`}
+              </span>
               {a.expression && (
                 <span className="kratos-assertion-card__expr">target: {a.expression}</span>
               )}

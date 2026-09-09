@@ -1,8 +1,15 @@
+import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
 from harness.tasks.base import TaskContext
 from harness.tasks.metrics import CheckMaasMetricsTask
+
+_BASE = "http://thanos.test/api/v1/query"
+
+
+def _q(query: str) -> str:
+    return str(httpx.URL(_BASE, params={"query": query}))
 
 
 def _make_ctx(config: dict | None = None, shared_state: dict | None = None) -> TaskContext:
@@ -21,7 +28,7 @@ def _make_ctx(config: dict | None = None, shared_state: dict | None = None) -> T
     )
 
 
-async def test_check_maas_metrics_stub_returns_zeroes(capsys: pytest.CaptureFixture) -> None:
+async def test_check_maas_metrics_stub_when_unconfigured(capsys: pytest.CaptureFixture) -> None:
     task = CheckMaasMetricsTask("check_maas_metrics", {})
     ctx = _make_ctx()
     result = await task.run(ctx)
@@ -49,16 +56,21 @@ async def test_check_maas_metrics_stores_in_shared_state() -> None:
     assert "metrics" in ctx.shared_state
 
 
-async def test_check_maas_metrics_fetches_from_url(httpx_mock: HTTPXMock) -> None:
+async def test_check_maas_metrics_fetches_via_configured_queries(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
-        url="http://metrics.test/metrics",
-        json={"total_requests": 42, "total_tokens": 100},
+        url=_q("sum(requests)"), json={"data": {"result": [{"value": [1, "42"]}]}}
+    )
+    httpx_mock.add_response(
+        url=_q("sum(tokens)"), json={"data": {"result": [{"value": [1, "100"]}]}}
     )
 
-    task = CheckMaasMetricsTask(
-        "check_maas_metrics", {"metrics_url": "http://metrics.test/metrics"}
+    task = CheckMaasMetricsTask("check_maas_metrics", {})
+    ctx = _make_ctx(
+        config={
+            "MAAS_METRICS_URL": _BASE,
+            "MAAS_METRICS_QUERIES": '{"total_requests": "sum(requests)", "total_tokens": "sum(tokens)"}',
+        }
     )
-    ctx = _make_ctx()
     result = await task.run(ctx)
 
     assert result.status == "PASS"
@@ -66,18 +78,33 @@ async def test_check_maas_metrics_fetches_from_url(httpx_mock: HTTPXMock) -> Non
     assert ctx.shared_state["metrics"]["total_tokens"] == 100
 
 
-async def test_check_maas_metrics_handles_fetch_error(capsys: pytest.CaptureFixture) -> None:
-    """Fetch failure is logged but task still passes with zeroes."""
+async def test_check_maas_metrics_task_params_override_config(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        url=_q("sum(override)"), json={"data": {"result": [{"value": [1, "7"]}]}}
+    )
+
     task = CheckMaasMetricsTask(
-        "check_maas_metrics", {"metrics_url": "http://unreachable.test/metrics"}
+        "check_maas_metrics",
+        {"metrics_url": _BASE, "queries": '{"total_requests": "sum(override)"}'},
+    )
+    ctx = _make_ctx(config={"MAAS_METRICS_URL": "http://ignored.test", "MAAS_METRICS_QUERIES": "{}"})
+    result = await task.run(ctx)
+
+    assert result.status == "PASS"
+    assert ctx.shared_state["metrics"]["total_requests"] == 7
+
+
+async def test_check_maas_metrics_handles_fetch_error(capsys: pytest.CaptureFixture) -> None:
+    """Unreachable metrics endpoint: query omitted, task still passes."""
+    task = CheckMaasMetricsTask(
+        "check_maas_metrics",
+        {"metrics_url": "http://unreachable.test/api/v1/query", "queries": '{"total_requests": "sum(foo)"}'},
     )
     ctx = _make_ctx()
     result = await task.run(ctx)
 
     assert result.status == "PASS"
-    assert ctx.shared_state["metrics"]["total_requests"] == 0
-    out = capsys.readouterr().out
-    assert "could not fetch" in out
+    assert ctx.shared_state["metrics"] == {}
 
 
 async def test_check_maas_metrics_cleanup_is_noop() -> None:

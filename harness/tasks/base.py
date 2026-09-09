@@ -13,7 +13,7 @@ class TaskContext:
     sa_token: str
     shared_state: dict
     config: dict
-    assertions: dict[str, str]
+    assertions: dict[str, str | dict]
     emit_assertion_state: Callable[[], Awaitable[None]]
 
 

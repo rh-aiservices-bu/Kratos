@@ -10,8 +10,8 @@ Tasks within a scenario need to pass data to subsequent tasks. For example:
 
 - `provision_api_key` creates one or more API keys whose IDs and secrets must be available to `send_requests` and to the cleanup step.
 - `apply_rate_limit_subscription` captures the original `MaaSSubscription` state so cleanup can restore it.
-- `send_requests` records latency/error/throughput metrics so assertions can evaluate them.
-- `check_maas_metrics` reads raw metric values from the RHOAI metrics endpoint so assertion evaluation can reference them.
+- `send_requests` records latency/error/throughput/token metrics so assertions can evaluate them.
+- The background MaaS metrics poller (`ScenarioRunner._metrics_bg`, see ADR-014) reads raw metric values from Prometheus so assertion evaluation can reference and cross-check them.
 
 Alternatives considered:
 
@@ -29,7 +29,8 @@ Canonical keys:
 | `api_keys` | `provision_api_key` | `send_requests`, cleanup |
 | `original_subscription` | `apply_rate_limit_subscription` | cleanup |
 | `inference_results` | `send_requests` | assertion evaluation |
-| `metrics` | `check_maas_metrics` | assertion evaluation |
+| `metrics` | background MaaS metrics poller (`ScenarioRunner`), `check_maas_metrics` | assertion evaluation |
+| `metrics_baseline` | background MaaS metrics poller (`ScenarioRunner`) | `metrics` delta computation (see ADR-014) |
 
 ## Consequences
 

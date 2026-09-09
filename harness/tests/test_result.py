@@ -87,6 +87,80 @@ def test_evaluate_all_mixed_states() -> None:
     assert results["missing_metric"].status == "PENDING"
 
 
+def test_match_assertion_pending_when_observed_missing() -> None:
+    state = {"inference_results": {"total_requests": 100.0}}
+    spec = {"compare": "metrics.total_requests_delta", "to": "inference_results.total_requests", "tolerance_pct": 5}
+    r = evaluate_assertion("maas_requests_match", spec, state)
+    assert r.status == "PENDING"
+    assert r.current_value is None
+
+
+def test_match_assertion_pending_when_expected_missing() -> None:
+    state = {"metrics": {"total_requests_delta": 100.0}}
+    spec = {"compare": "metrics.total_requests_delta", "to": "inference_results.total_requests", "tolerance_pct": 5}
+    r = evaluate_assertion("maas_requests_match", spec, state)
+    assert r.status == "PENDING"
+
+
+def test_match_assertion_passing_within_tolerance() -> None:
+    state = {
+        "metrics": {"total_requests_delta": 102.0},
+        "inference_results": {"total_requests": 100.0},
+    }
+    spec = {"compare": "metrics.total_requests_delta", "to": "inference_results.total_requests", "tolerance_pct": 5}
+    r = evaluate_assertion("maas_requests_match", spec, state)
+    assert r.status == "PASSING"
+    assert r.current_value == 102.0
+    assert r.expected_value == 100.0
+
+
+def test_match_assertion_failing_outside_tolerance() -> None:
+    state = {
+        "metrics": {"total_requests_delta": 150.0},
+        "inference_results": {"total_requests": 100.0},
+    }
+    spec = {"compare": "metrics.total_requests_delta", "to": "inference_results.total_requests", "tolerance_pct": 5}
+    r = evaluate_assertion("maas_requests_match", spec, state)
+    assert r.status == "FAILING"
+
+
+def test_match_assertion_exact_boundary_passes() -> None:
+    state = {
+        "metrics": {"total_requests_delta": 105.0},
+        "inference_results": {"total_requests": 100.0},
+    }
+    spec = {"compare": "metrics.total_requests_delta", "to": "inference_results.total_requests", "tolerance_pct": 5}
+    assert evaluate_assertion("maas_requests_match", spec, state).status == "PASSING"
+
+
+def test_match_assertion_zero_expected_uses_absolute_floor() -> None:
+    """With expected == 0, tolerance is computed against a floor of 1, not 0."""
+    state = {
+        "metrics": {"total_requests_delta": 0.0},
+        "inference_results": {"total_requests": 0.0},
+    }
+    spec = {"compare": "metrics.total_requests_delta", "to": "inference_results.total_requests", "tolerance_pct": 5}
+    assert evaluate_assertion("maas_requests_match", spec, state).status == "PASSING"
+
+
+def test_evaluate_all_assertions_mixed_string_and_dict_forms() -> None:
+    state = {
+        "inference_results": {"error_rate_pct": 1.0, "total_requests": 100.0},
+        "metrics": {"total_requests_delta": 100.0},
+    }
+    assertions = {
+        "error_rate_pct": "< 5",
+        "maas_requests_match": {
+            "compare": "metrics.total_requests_delta",
+            "to": "inference_results.total_requests",
+            "tolerance_pct": 5,
+        },
+    }
+    results = {r.name: r for r in evaluate_all_assertions(assertions, state)}
+    assert results["error_rate_pct"].status == "PASSING"
+    assert results["maas_requests_match"].status == "PASSING"
+
+
 def test_run_status_pass() -> None:
     tasks = [TaskResult("t1", "PASS", 100.0)]
     assertions = [AssertionResult("x", "< 5", "PASSING", 2.0)]

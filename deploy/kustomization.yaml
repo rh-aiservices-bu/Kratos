@@ -6,6 +6,7 @@ namespace: kratos
 resources:
   - serviceaccount.yaml
   - rbac.yaml
+  - rbac-monitoring.yaml
   - pvc.yaml
   - configmap-global.yaml
   - configmap-scenarios.yaml

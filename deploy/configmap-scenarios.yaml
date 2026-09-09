@@ -21,7 +21,6 @@ data:
           concurrency: "${config.concurrency}"
           prompt: "${config.prompt}"
           key_pool: true
-      - name: check_maas_metrics
     assertions:
       error_rate_pct: "< 5"
       p99_latency_ms: "< 10000"
@@ -46,7 +45,6 @@ data:
           concurrency: "${config.concurrency}"
           prompt: "${config.prompt}"
           key_pool: true
-      - name: check_maas_metrics
     assertions:
       error_rate_pct: "< 5"
     cleanup: automatic
@@ -95,7 +93,6 @@ data:
           concurrency: "${config.concurrency}"
           prompt: "${config.prompt}"
           key_pool: true
-      - name: check_maas_metrics
     assertions:
       throughput_rps: "<= ${config.rate_limit_rps}"
       error_rate_pct: "< 30"
@@ -108,7 +105,7 @@ data:
       request_count: 200
       concurrency: 10
       prompt: "Hello, world!"
-      metrics_min_requests: 190
+      metrics_tolerance_pct: 5
     tasks:
       - name: provision_api_key
         params:
@@ -119,8 +116,14 @@ data:
           concurrency: "${config.concurrency}"
           prompt: "${config.prompt}"
           key_pool: true
-      - name: check_maas_metrics
     assertions:
       error_rate_pct: "< 5"
-      total_requests: ">= ${config.metrics_min_requests}"
+      maas_requests_match:
+        compare: metrics.total_requests_delta
+        to: inference_results.total_requests
+        tolerance_pct: "${config.metrics_tolerance_pct}"
+      maas_tokens_match:
+        compare: metrics.total_tokens_delta
+        to: inference_results.total_tokens_sent
+        tolerance_pct: "${config.metrics_tolerance_pct}"
     cleanup: automatic

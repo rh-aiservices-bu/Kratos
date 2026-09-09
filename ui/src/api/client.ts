@@ -16,6 +16,7 @@ export interface AssertionState {
   name: string;
   status: 'PENDING' | 'PASSING' | 'FAILING';
   value: number | null;
+  expected_value?: number | null;
   expression?: string;
 }
 
