@@ -1,13 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CodeBlock, CodeBlockCode } from '@patternfly/react-core';
 
-export interface AssertionState {
-  name: string;
-  status: 'PENDING' | 'PASSING' | 'FAILING';
-  value: number | null;
-  expression?: string;
-}
-
 type StreamStatus = 'connecting' | 'streaming' | 'completed' | 'error';
 
 const STATUS_LABEL: Record<StreamStatus, string> = {
@@ -27,22 +20,9 @@ interface LogPollResponse {
 
 interface Props {
   runId: string;
-  onAssertionUpdate: (assertions: AssertionState[]) => void;
 }
 
-function isAssertionEvent(line: string): AssertionState[] | null {
-  try {
-    const parsed = JSON.parse(line) as { event?: string; data?: AssertionState[] };
-    if (parsed.event === 'assertion_state' && Array.isArray(parsed.data)) {
-      return parsed.data;
-    }
-  } catch {
-    // not JSON
-  }
-  return null;
-}
-
-export function LogStream({ runId, onAssertionUpdate }: Props) {
+export function LogStream({ runId }: Props) {
   const [lines, setLines] = useState<string[]>([]);
   const [status, setStatus] = useState<StreamStatus>('connecting');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -66,20 +46,7 @@ export function LogStream({ runId, onAssertionUpdate }: Props) {
 
           if (data.lines.length > 0) {
             setStatus('streaming');
-
-            const logLines: string[] = [];
-            for (const line of data.lines) {
-              const assertions = isAssertionEvent(line);
-              if (assertions) {
-                onAssertionUpdate(assertions);
-              } else {
-                logLines.push(line);
-              }
-            }
-            if (logLines.length > 0) {
-              setLines((prev) => [...prev, ...logLines]);
-            }
-
+            setLines((prev) => [...prev, ...data.lines]);
             offset = data.next_offset;
           }
 
@@ -104,7 +71,7 @@ export function LogStream({ runId, onAssertionUpdate }: Props) {
     return () => {
       active = false;
     };
-  }, [runId, onAssertionUpdate]);
+  }, [runId]);
 
   // Scroll within the log box only — never touch window scroll.
   useEffect(() => {

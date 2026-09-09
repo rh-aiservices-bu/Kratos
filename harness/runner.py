@@ -1,9 +1,12 @@
 import json
+import os
 import time
 import traceback
 from pathlib import Path
 
 _SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+_DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
+_RESULTS_DIR = _DATA_DIR / "results"
 
 
 def _read_sa_token(config: dict) -> str:
@@ -41,25 +44,31 @@ class ScenarioRunner:
         task_defs: list[dict] = scenario.get("tasks") or []
         shared_state: dict = {}
 
+        def _write_assertions(results: list) -> None:
+            """Write current assertion state to the dedicated PVC file."""
+            payload = [
+                {
+                    "name": r.name,
+                    "status": r.status,
+                    "value": r.current_value,
+                    "expression": r.expression,
+                }
+                for r in results
+            ]
+            try:
+                _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+                (_RESULTS_DIR / f"{self.run_id}-assertions.json").write_text(
+                    json.dumps(payload), encoding="utf-8"
+                )
+            except OSError as exc:
+                print(f"[runner] could not write assertions: {exc}", flush=True)
+
         async def emit() -> None:
             now = time.monotonic()
             if now - self._last_emit < _EMIT_DEBOUNCE_S:
                 return
             self._last_emit = now
-            results = evaluate_all_assertions(assertions, shared_state)
-            payload = {
-                "event": "assertion_state",
-                "data": [
-                    {
-                        "name": r.name,
-                        "status": r.status,
-                        "value": r.current_value,
-                        "expression": r.expression,
-                    }
-                    for r in results
-                ],
-            }
-            print(json.dumps(payload), flush=True)
+            _write_assertions(evaluate_all_assertions(assertions, shared_state))
 
         ctx = TaskContext(
             run_id=self.run_id,
@@ -117,6 +126,8 @@ class ScenarioRunner:
                 )
 
         assertion_results = evaluate_all_assertions(assertions, shared_state)
+        # Final (non-debounced) write so the file reflects the definitive end state.
+        _write_assertions(assertion_results)
         status = "FAIL" if run_failed else compute_run_status(task_results, assertion_results)
 
         return RunResult(

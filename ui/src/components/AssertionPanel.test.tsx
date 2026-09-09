@@ -1,22 +1,23 @@
 import { render, screen } from '@testing-library/react';
 import { AssertionPanel } from './AssertionPanel';
-import type { AssertionState } from './LogStream';
+import type { AssertionState } from '../api/client';
 
-test('renders nothing when assertions list is empty', () => {
-  const { container } = render(<AssertionPanel assertions={[]} />);
-  expect(container).toBeEmptyDOMElement();
+test('shows placeholder when assertions list is empty', () => {
+  render(<AssertionPanel assertions={[]} />);
+  expect(screen.getByText(/waiting for assertion data/i)).toBeInTheDocument();
 });
 
-test('renders assertion labels', () => {
+test('renders formatted assertion names and statuses', () => {
   const assertions: AssertionState[] = [
-    { name: 'error_rate_pct', status: 'PASSING', value: 2.1 },
+    { name: 'error_rate_pct', status: 'PASSING', value: 2.1, expression: '< 5' },
     { name: 'p99_latency_ms', status: 'PENDING', value: null },
     { name: 'throughput_rps', status: 'FAILING', value: 15 },
   ];
 
   render(<AssertionPanel assertions={assertions} />);
 
-  expect(screen.getByText(/error_rate_pct.*PASSING/)).toBeInTheDocument();
-  expect(screen.getByText(/p99_latency_ms.*PENDING/)).toBeInTheDocument();
-  expect(screen.getByText(/throughput_rps.*FAILING/)).toBeInTheDocument();
+  expect(screen.getByText(/Error Rate/i)).toBeInTheDocument();
+  expect(screen.getByText('PASSING')).toBeInTheDocument();
+  expect(screen.getByText('PENDING')).toBeInTheDocument();
+  expect(screen.getByText('FAILING')).toBeInTheDocument();
 });

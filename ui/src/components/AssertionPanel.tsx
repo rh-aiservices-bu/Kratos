@@ -1,4 +1,4 @@
-import type { AssertionState } from './LogStream';
+import type { AssertionState } from '../api/client';
 
 interface Props {
   assertions: AssertionState[];

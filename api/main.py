@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from api.db import get_db_path, init_db
+from api.routes.assertions import router as assertions_router
 from api.routes.logs import router as logs_router
 from api.routes.runs import router as runs_router
 from api.routes.scenarios import router as scenarios_router
@@ -68,6 +69,7 @@ app = FastAPI(title="Kratos", version="0.1.0", lifespan=lifespan)
 app.include_router(scenarios_router)
 app.include_router(runs_router)
 app.include_router(logs_router)
+app.include_router(assertions_router)
 
 _ui_dist = Path(__file__).parent.parent / "ui" / "dist"
 if _ui_dist.exists():

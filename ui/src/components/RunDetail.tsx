@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Button, Grid, GridItem, Page, PageSection, Spinner } from '@patternfly/react-core';
 import { AssertionPanel } from './AssertionPanel';
-import { LogStream, type AssertionState } from './LogStream';
-import { getRun, type Run } from '../api/client';
+import { LogStream } from './LogStream';
+import { getAssertions, getRun, type AssertionState, type Run } from '../api/client';
 
 function formatScenarioName(name: string): string {
   return name.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
@@ -58,6 +58,14 @@ export function RunDetail({ runId, onBack }: Props) {
     return () => clearInterval(interval);
   }, [runId]);
 
+  useEffect(() => {
+    getAssertions(runId).then(setAssertions).catch(() => {});
+    const interval = setInterval(() => {
+      getAssertions(runId).then(setAssertions).catch(() => {});
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [runId]);
+
   return (
     <Page>
       <PageSection>
@@ -94,7 +102,7 @@ export function RunDetail({ runId, onBack }: Props) {
         <Grid hasGutter>
           <GridItem span={8}>
             <p className="kratos-section-heading">Live Logs</p>
-            <LogStream runId={runId} onAssertionUpdate={setAssertions} />
+            <LogStream runId={runId} />
           </GridItem>
           <GridItem span={4}>
             <AssertionPanel assertions={assertions} />

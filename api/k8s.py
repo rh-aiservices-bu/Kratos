@@ -111,7 +111,14 @@ def create_job(scenario: str, run_id: str, config_overrides: dict | None = None)
 # ---------------------------------------------------------------------------
 
 def _capture_logs(run_id: str) -> None:
-    """Background thread: find the pod and stream its logs to /data/logs/{run_id}.log."""
+    """Background thread: find the pod and poll its logs to /data/logs/{run_id}.log.
+
+    Uses repeated read_namespaced_pod_log(follow=False) rather than the
+    streaming follow=True API.  The non-follow call always returns the full log
+    from the start of the container, so we can never miss early lines due to
+    connection timing.  We call it every second, track how many lines we've
+    already written, and append the new ones.
+    """
     tmp_file = _LOGS_DIR / f"{run_id}.log.tmp"
     log_file = _LOGS_DIR / f"{run_id}.log"
 
@@ -122,41 +129,55 @@ def _capture_logs(run_id: str) -> None:
         core = k8s.CoreV1Api()
         label = f"kratos-run-id={run_id}"
 
-        # Wait for the pod to exist AND for its container to be running/finished.
+        # Wait for the pod to appear (up to 120 s).
         pod_name: str | None = None
-        for _ in range(60):  # wait up to 120 s
+        for _ in range(60):
             pods = core.list_namespaced_pod(namespace=NAMESPACE, label_selector=label)
             if pods.items:
-                pod = pods.items[0]
-                pod_name = pod.metadata.name
-                phase = (pod.status.phase or "") if pod.status else ""
-                if phase in ("Running", "Succeeded", "Failed"):
-                    break
+                pod_name = pods.items[0].metadata.name
+                break
             time.sleep(2)
 
         if pod_name is None:
             print(f"[k8s] pod not found for run {run_id}", flush=True)
             return
 
-        log_stream = core.read_namespaced_pod_log(
-            name=pod_name,
-            namespace=NAMESPACE,
-            follow=True,
-            _preload_content=False,
-        )
-        # Use a line buffer: stream() yields raw byte chunks, not full lines.
-        buf = ""
+        seen_lines = 0
         with tmp_file.open("w", encoding="utf-8") as f:
-            for raw in log_stream.stream():
-                buf += raw.decode(errors="replace")
-                while "\n" in buf:
-                    line, buf = buf.split("\n", 1)
-                    f.write(line + "\n")
-                    f.flush()
-            # Flush any trailing content without a final newline.
-            if buf:
-                f.write(buf + "\n")
-                f.flush()
+            while True:
+                # Check if the pod has finished before reading logs so that
+                # the log read that follows is guaranteed to include all output.
+                done = False
+                try:
+                    pod_obj = core.read_namespaced_pod(name=pod_name, namespace=NAMESPACE)
+                    phase = (pod_obj.status.phase or "") if pod_obj.status else ""
+                    done = phase in ("Succeeded", "Failed")
+                except Exception:
+                    pass
+
+                # Read the complete log from the beginning every iteration.
+                # The non-follow endpoint always returns everything written so
+                # far, so appending only the unseen tail is safe.
+                try:
+                    raw = core.read_namespaced_pod_log(
+                        name=pod_name, namespace=NAMESPACE, follow=False
+                    )
+                    # The kubernetes client may return bytes or str depending on
+                    # version; always normalise to str before splitting.
+                    text = raw.decode(errors="replace") if isinstance(raw, bytes) else (raw or "")
+                    all_lines = text.splitlines()
+                    for line in all_lines[seen_lines:]:
+                        f.write(line + "\n")
+                        f.flush()
+                    seen_lines = len(all_lines)
+                except Exception as exc:
+                    # Container may not have started writing yet — keep trying.
+                    print(f"[k8s] log read error for {run_id}: {exc}", flush=True)
+
+                if done:
+                    break
+
+                time.sleep(1)
 
     except Exception as exc:
         print(f"[k8s] log capture error for {run_id}: {exc}", flush=True)

@@ -12,6 +12,13 @@ export interface Run {
   updated_at: string;
 }
 
+export interface AssertionState {
+  name: string;
+  status: 'PENDING' | 'PASSING' | 'FAILING';
+  value: number | null;
+  expression?: string;
+}
+
 export interface CreateRunResponse {
   run_id: string;
   scenario: string;
@@ -47,5 +54,16 @@ export async function getRun(runId: string): Promise<Run> {
   const r = await fetch(`/api/runs/${runId}`);
   if (!r.ok) throw new Error(`getRun failed: ${r.status}`);
   return r.json() as Promise<Run>;
+}
+
+export async function getAssertions(runId: string): Promise<AssertionState[]> {
+  try {
+    const r = await fetch(`/api/runs/${runId}/assertions`);
+    if (!r.ok) return [];
+    const data = (await r.json()) as { assertions: AssertionState[] };
+    return data.assertions ?? [];
+  } catch {
+    return [];
+  }
 }
 
