@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button, Grid, GridItem, Page, PageSection, Spinner } from '@patternfly/react-core';
 import { AssertionPanel } from './AssertionPanel';
 import { LogStream } from './LogStream';
+import { TaskProgress } from './TaskProgress';
 import { getAssertions, getRun, type AssertionState, type Run } from '../api/client';
 
 function formatScenarioName(name: string): string {
@@ -98,6 +99,8 @@ export function RunDetail({ runId, onBack }: Props) {
             <Spinner size="sm" aria-label="Loading run" />
           )}
         </div>
+
+        <TaskProgress runId={runId} />
 
         <Grid hasGutter>
           <GridItem span={8}>

@@ -99,6 +99,7 @@ class SendRequestsTask(Task):
                     "throughput_rps": success / elapsed if elapsed > 0 else 0.0,
                     **_percentiles(latencies),
                 }
+                ctx.shared_state["task_progress"] = {"current": total, "total": count}
                 now = time.monotonic()
                 if now - last_emit >= _DEBOUNCE_SECS:
                     last_emit = now

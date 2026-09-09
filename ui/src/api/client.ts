@@ -56,6 +56,23 @@ export async function getRun(runId: string): Promise<Run> {
   return r.json() as Promise<Run>;
 }
 
+export interface TaskProgressEntry {
+  name: string;
+  status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAIL';
+  progress?: { current: number; total: number };
+}
+
+export async function getProgress(runId: string): Promise<TaskProgressEntry[]> {
+  try {
+    const r = await fetch(`/api/runs/${runId}/progress`);
+    if (!r.ok) return [];
+    const data = (await r.json()) as { tasks: TaskProgressEntry[] };
+    return data.tasks ?? [];
+  } catch {
+    return [];
+  }
+}
+
 export async function getAssertions(runId: string): Promise<AssertionState[]> {
   try {
     const r = await fetch(`/api/runs/${runId}/assertions`);
