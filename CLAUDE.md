@@ -11,9 +11,10 @@ Tests are composed of atomic **tasks** (e.g., provision API key, send inference 
 ```
                   Browser UI (React + TypeScript + PatternFly 5)
                   - Pick scenario, override config params, start run
-                  - Live log polling (REST, 1s interval)
-                  - Live assertion status panel
-                  - Results history + per-run detail view
+                  - Live log polling (REST, 1s interval) with smart scroll
+                  - Live assertion status panel (2s poll, independent of logs)
+                  - Task progress pipeline (2s poll)
+                  - Results history + per-run detail view; URL hash routing (#run/<id>)
                           |
                   FastAPI Backend (Deployment)
                   - Serve UI static files
@@ -21,14 +22,17 @@ Tests are composed of atomic **tasks** (e.g., provision API key, send inference 
                   - POST /api/runs  (accepts config_overrides)
                   - GET  /api/runs, /api/runs/{id}
                   - GET  /api/runs/{id}/logs/lines?offset=N  (REST poll)
+                  - GET  /api/runs/{id}/assertions            (reads PVC file)
+                  - GET  /api/runs/{id}/progress              (reads PVC file)
                   - Creates K8s Jobs, captures pod logs to PVC
                   - SQLite run history on PVC
                           |
                   Kubernetes Job (one per run)
                   - Reads global ConfigMap + scenario YAML
                   - Executes tasks in order using SA token
+                  - Background MaaS metrics poller (every 5s, if MAAS_METRICS_URL set)
                   - Runs cleanup at end (pass or fail)
-                  - Writes results to PVC
+                  - Writes assertions + progress to PVC in real time
 ```
 
 ## MaaS API (key facts)
@@ -76,20 +80,23 @@ kratos/
 │   └── routes/
 │       ├── scenarios.py        # GET /api/scenarios (includes config defaults from YAML)
 │       ├── runs.py             # POST /api/runs (config_overrides), GET /api/runs, GET /api/runs/{id}
-│       └── logs.py             # GET /api/runs/{id}/logs/lines?offset=N  (REST poll, no SSE)
+│       ├── logs.py             # GET /api/runs/{id}/logs/lines?offset=N  (REST poll, no SSE)
+│       ├── assertions.py       # GET /api/runs/{id}/assertions  (reads /data/results/<id>-assertions.json)
+│       └── progress.py         # GET /api/runs/{id}/progress    (reads /data/results/<id>-progress.json)
 │
 ├── ui/                         # Frontend (React + TypeScript + PatternFly 5; built to ui/dist/)
 │   ├── src/
-│   │   ├── App.tsx             # Top-level layout: view state routing (home | run detail), Kratos masthead
+│   │   ├── App.tsx             # Top-level: URL hash routing (#run/<id>), pushState/popstate, Kratos masthead
 │   │   ├── api/client.ts       # Typed fetch wrappers for all backend API routes
 │   │   ├── styles/theme.css    # Kratos/God of War dark theme: dark header, red accents, card styles
 │   │   └── components/
 │   │       ├── ScenarioList.tsx    # Compact scenario cards with Run button; error/retry state
 │   │       ├── RunTrigger.tsx      # Config override editor (pre-filled from YAML defaults) + launch modal
-│   │       ├── LogStream.tsx       # REST poll consumer (1s interval), scrolling CodeBlock, stream status pill
+│   │       ├── LogStream.tsx       # REST poll consumer (1s interval), smart scroll, "N new lines" badge
 │   │       ├── AssertionPanel.tsx  # Live assertion cards (Passing/Failing/Pending) with value + expression
+│   │       ├── TaskProgress.tsx    # Horizontal task pipeline chips (PENDING/RUNNING/DONE/FAIL) with progress bars
 │   │       ├── RunHistory.tsx      # PatternFly Table of past runs; color-coded status badges; 3s poll while active
-│   │       └── RunDetail.tsx       # Per-run detail page: metadata bar, logs + assertions side-by-side, back button
+│   │       └── RunDetail.tsx       # Per-run detail page: metadata bar, task pipeline, logs + assertions grid
 │   ├── package.json
 │   └── tsconfig.json
 │
@@ -130,7 +137,8 @@ class Task(ABC):
 ```
 - `TaskContext` carries: `maas_api_url`, `sa_token`, `shared_state: dict`, resolved config, and an `emit_assertion_state()` helper
 - `shared_state` is how tasks pass data forward — e.g. `provision_api_key` writes created key IDs into `shared_state["api_keys"]`; the cleanup reads and deletes them all
-- `emit_assertion_state(ctx)` is called by tasks after every atomic operation that produces metric data (e.g. after each inference request in `send_requests`). It re-evaluates all assertions against the current `shared_state` and prints a structured JSON event to stdout (picked up by the log capture thread). Emission is debounced (at most every 100ms) to avoid flooding the log at high request rates. Tasks without rolling metrics call it once on completion.
+- Tasks report within-task progress by writing `shared_state["task_progress"] = {"current": N, "total": M}` before calling `emit_assertion_state()`. The runner snapshots and clears this when the task completes, preserving the final count for display.
+- `emit_assertion_state()` is called by tasks after every atomic operation that produces metric data (e.g. after each inference request in `send_requests`, after each key in `provision_api_key`). It re-evaluates all assertions against the current `shared_state` and writes the result to `/data/results/<run-id>-assertions.json` (PVC file, NOT stdout). Emission is debounced (at most every 100ms). It also writes the current task progress to `/data/results/<run-id>-progress.json`.
 - **Cleanup runs after ALL tasks complete (or fail) — not per-task.** This is intentional: lets you observe the effect of many accumulated keys/resources before cleanup
 
 ### Tiered Config (three-level merge, lowest → highest precedence)
@@ -168,47 +176,51 @@ tasks:
   - name: provision_api_key
     params:
       key_name: "kratos-load-key"
-      ephemeral: true
   - name: send_requests
     params:
       count: "${config.request_count}"
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
-  - name: check_maas_metrics
+      key_pool: true
 assertions:
   error_rate_pct: "< 5"
   p99_latency_ms: "< 10000"
 cleanup: automatic
 ```
+`check_maas_metrics` is no longer a task step — MaaS metrics are polled continuously in the background by `ScenarioRunner` (see below).
 
 ### Assertions
-- Evaluated continuously within tasks — after every atomic operation that produces new metric data (e.g. after every individual inference request in `send_requests`). Assertion state is written to the run log as a JSON line `{"event":"assertion_state","data":[...]}` and picked up by the frontend's log poll loop, not delivered via SSE. Emission is debounced to avoid flooding the log at high request rates.
+- Evaluated continuously — after every atomic operation that produces new metric data (e.g. after each inference request in `send_requests`, after each key creation in `provision_api_key`). Result is written to `/data/results/<run-id>-assertions.json` on the PVC. **Not parsed from pod logs** — the log stream is plain text only.
+- Frontend polls `GET /api/runs/{id}/assertions` every 2s independently of the log poll.
 - Format: `metric_name: "<operator> <value>"` (operators: `<`, `>`, `<=`, `>=`, `==`)
-- Available metrics from `send_requests`: `error_rate_pct`, `p50/p95/p99_latency_ms`, `throughput_rps`, `total_requests`, `success_count`, `fail_count`
-- Available metrics from `check_maas_metrics`: `total_requests`, `total_tokens` (more TBD)
+- Available metrics from `send_requests` (via `shared_state["inference_results"]`): `error_rate_pct`, `p50/p95/p99_latency_ms`, `throughput_rps`, `total_requests`, `success_count`, `fail_count`
+- Available metrics from background MaaS metrics poller (via `shared_state["metrics"]`): `total_requests`, `total_tokens` (requires `MAAS_METRICS_URL` in global ConfigMap)
 - Run is PASS only if all assertions pass (or no assertions defined)
 
 ### Results Storage
 - SQLite on PVC at `/data/kratos.db` (tables: `runs`, `task_results`; `runs` has a `config_overrides TEXT` column)
-- Run results JSON also written to `/data/results/<run-id>.json`
-- Pod logs persisted to PVC at `/data/logs/<run-id>.log` (see Log Streaming below)
+- Run results JSON: `/data/results/<run-id>.json`
+- Live assertion state: `/data/results/<run-id>-assertions.json` — written by `emit_assertion_state()`, served by `GET /api/runs/{id}/assertions`
+- Live task progress: `/data/results/<run-id>-progress.json` — written by `_write_progress()` at task start/end and on each `emit()`, served by `GET /api/runs/{id}/progress`
+- Pod logs: `/data/logs/<run-id>.log` (final) or `.log.tmp` (in-progress) — see Log Streaming below
 
 ### Log Streaming (REST polling — no SSE)
 SSE was removed because HAProxy (OpenShift edge-terminated Routes) buffers response bodies until the connection closes, making live streaming impossible without cluster-level proxy config changes.
 
 Current approach:
-- When the frontend first polls `/api/runs/{id}/logs/lines`, `ensure_log_capture(run_id)` starts a background daemon thread (`_capture_logs`) if one isn't already running.
-- `_capture_logs` waits up to 60 s for the Job pod to appear (polling every 2 s), then streams pod logs via the `kubernetes` Python client (`read_namespaced_pod_log(follow=True, _preload_content=False)`) and writes each line to `/data/logs/<run-id>.log.tmp`, flushing after every line.
-- When the stream ends (pod exits), the thread atomically renames `.log.tmp` → `.log`. The `.log` file signals "done" to readers.
-- `get_log_lines(run_id, offset)` reads from `.log` (done=True) if it exists, otherwise from `.log.tmp` (done=False). Returns `(new_lines[offset:], done)`.
-- The frontend polls `/api/runs/{id}/logs/lines?offset=N` every 1 s, accumulates lines, and advances the offset. It parses assertion JSON events inline and routes them to the `AssertionPanel`. Polling stops when `done=true`.
+- `create_job` immediately starts a background daemon thread (`_capture_logs`) so it is already waiting for the pod before the user opens the run detail page.
+- `_capture_logs` waits up to 120 s for the Job pod to appear (polling every 2 s). Once found, it polls `read_namespaced_pod_log(follow=False, _preload_content=False)` every 1 s. Each call returns the complete log from the start; the thread tracks `seen_lines` and appends only new lines to `.log.tmp`. Using `_preload_content=False` gives a raw urllib3 response that is decoded manually — the default deserializer calls `str()` on bytes, producing `b"..."` repr strings.
+- When the pod phase is `Succeeded` or `Failed`, the thread does one final read then atomically renames `.log.tmp` → `.log`. The `.log` file signals "done" to readers.
+- `get_log_lines(run_id, offset)` reads from `.log` (done=True) if it exists, otherwise `.log.tmp` (done=False). Returns `(new_lines[offset:], done)`.
+- The frontend polls `/api/runs/{id}/logs/lines?offset=N` every 1 s, accumulates lines. Log lines are plain text only — no JSON assertion events are parsed from the log stream (assertions use their own endpoint). Polling stops when `done=true`.
+- The log view uses **smart scroll**: auto-scrolls when the user is at the bottom; if scrolled up, shows a "↓ N new lines" badge that jumps back to the bottom on click.
 - Log files survive pod deletion (TTL cleanup, OCP GC) since they live on the shared PVC.
 
 ### Cleanup
 - Every task's `cleanup()` runs after the full scenario regardless of pass/fail
 - Cleanup failures are logged but do not mark the run as failed
 - No per-run K8s Secrets needed — SA token is auto-mounted; MaaS API keys are created and deleted by harness tasks themselves
-- **Metrics pipeline data is not cleaned up.** The `check_maas_metrics` task is read-only; any request traces or counters written to the RHOAI metrics pipeline during a run are intentionally left in place. Cleaning up historical metrics data is deferred to future work.
+- **Metrics pipeline data is not cleaned up.** MaaS metrics polling is read-only; any request traces or counters written to the RHOAI metrics pipeline during a run are intentionally left in place. Cleaning up historical metrics data is deferred to future work.
 - Primary cleanup targets: MaaS API keys (bulk-revoked via `/maas-api/v1/api-keys/bulk-revoke`) and `MaaSSubscription` CRs (restored or deleted via Kubernetes API)
 
 ### SA Permissions Required
@@ -219,23 +231,42 @@ Current approach:
 
 ## Task Reference
 
-- **`provision_api_key`**: Calls `POST /maas-api/v1/api-keys` with the SA token. Stores created key IDs in `shared_state["api_keys"]`. Can be called multiple times to accumulate a pool of keys. Cleanup calls `POST /maas-api/v1/api-keys/bulk-revoke` to delete all created keys.
+- **`provision_api_key`**: Calls `POST /maas-api/v1/api-keys` with the SA token. Stores created key IDs in `shared_state["api_keys"]`. Supports `count` param to create N keys in a loop; sets `shared_state["task_progress"]` after each key so the UI progress chip updates. Cleanup calls individual `DELETE /maas-api/v1/api-keys/{id}` for each created key.
 
-- **`send_requests`**: Sends concurrent OpenAI-compatible inference requests. Resolves `url` and `token` via a three-level priority chain: (1) explicit YAML `params` (e.g. `${config.target_url}`), (2) inherited from `shared_state` (set by a prior task), (3) `TaskContext` defaults (MaaS model discovery + SA token). When `key_pool` param is set (list of api keys from `shared_state["api_keys"]`), distributes requests evenly across the pool (floor(M/N) per key, remainder to first). After every completed request, updates `shared_state["inference_results"]` (latency, error count, throughput) and calls `emit_assertion_state(ctx)`. Cleanup is a no-op.
+- **`send_requests`**: Sends concurrent OpenAI-compatible inference requests. Resolves `url` and `token` via a three-level priority chain: (1) explicit YAML `params`, (2) `shared_state`, (3) `TaskContext` defaults (MaaS model discovery + SA token). When `key_pool: true` is set, uses keys from `shared_state["api_keys"]` and distributes requests evenly across the pool (floor(M/N) per key, remainder to first). After every completed request, updates `shared_state["inference_results"]` (latency, error count, throughput) and `shared_state["task_progress"]`, then calls `emit_assertion_state()`. Cleanup is a no-op.
 
-- **`check_maas_metrics`**: Reads the RHOAI/MaaS metrics endpoint (TBD), stores raw values in `shared_state["metrics"]` for assertion evaluation, and always prints a formatted human-readable summary to the run log — regardless of assertion pass/fail. Initial metrics validated: `total_requests` and `total_tokens` (to confirm they reflect the volume actually sent). More metrics TBD. Used as a final validation step in all MaaS-based scenarios (1, 2, 4, 5). Not used in `direct_inference` since it bypasses MaaS. Metrics pipeline data is not cleaned up — it is a read-only observation and cleanup of historical metrics data is deferred to future work.
+- **`check_maas_metrics`**: Reads the RHOAI/MaaS metrics endpoint (`MAAS_METRICS_URL` config), stores raw values in `shared_state["metrics"]` for assertion evaluation, and prints a human-readable summary to the run log. **This task class is available for explicit use but is no longer included in standard scenario task lists.** MaaS metrics are now polled automatically in the background by `ScenarioRunner` (see Background Metrics Polling below).
 
 - **`apply_rate_limit_subscription`**: Uses `kubernetes.client.CustomObjectsApi` to create or patch a `MaaSSubscription` CR (`maas.opendatahub.io/v1alpha1`) with a configured `rps_limit`. Stores the original subscription state in `shared_state["original_subscription"]` for cleanup. Cleanup restores or deletes the CR as appropriate.
+
+### Background Metrics Polling
+
+`ScenarioRunner.run()` starts an asyncio background task (`_metrics_bg`) at the beginning of every run when `MAAS_METRICS_URL` is set in the global ConfigMap. It polls the metrics endpoint every 5 s, writes the result into `shared_state["metrics"]`, and calls `emit()` to trigger an assertion re-evaluation. This means assertions on `total_requests`, `total_tokens`, etc. update live in the AssertionPanel throughout the run — not just at the end.
+
+After the main task loop and cleanup complete, the background task is cancelled and one final definitive fetch is done before writing the final assertion state.
+
+The `check_maas_metrics` task class still exists and can be added to a scenario's task list if an explicit final check with a log summary is wanted. Standard scenarios no longer include it.
+
+### Task Progress UI
+
+The run detail page shows a horizontal **task pipeline** above the logs. Each chip displays:
+- Status icon: `○` PENDING | CSS spinner RUNNING | `✓` DONE | `✗` FAIL
+- Task name (snake_case → Title Case)
+- A mini progress bar + `{current} / {total}` label when the task reports `shared_state["task_progress"]` — visible during RUNNING and preserved on completion (at 100% for DONE, actual for FAIL)
+
+Chip background colours: grey (PENDING), blue tint (RUNNING), green (DONE), red (FAIL).
+
+The `TaskProgress` component polls `GET /api/runs/{id}/progress` every 2 s, managing its own interval independently of logs and assertions.
 
 ## Scenarios (v1)
 
 | Scenario | Tasks | Default Config | Default Assertions | Notes |
 |---|---|---|---|---|
-| `single_key_load` | provision_api_key → send_requests → check_maas_metrics → [cleanup: delete key] | `request_count: 100`, `concurrency: 5` | `error_rate_pct: "< 5"`, `p99_latency_ms: "< 10000"` | Baseline load test — one key, N requests through MaaS. Validates inference and confirms metrics are populated. Replaces `stress_test`. |
-| `multi_key_load` | provision_api_key × N → send_requests (M reqs distributed across key pool) → check_maas_metrics → [cleanup: bulk-revoke all N keys] | `key_count: 5`, `request_count: 5`, `concurrency: 5` | `error_rate_pct: "< 5"` | M requests distributed evenly across N keys (floor(M/N) per key, remainder to first). Default M=N so each key gets exactly 1 probe. All keys accumulate before cleanup — intentional. Replaces `key_provisioning`. |
-| `direct_inference` | send_requests (url=target_url, token=target_token) — no key provisioning, no cleanup | `target_url: ""` (required), `target_token: ""` (required), `request_count: 50`, `concurrency: 5` | `error_rate_pct: "< 5"` | Send inference directly to any configurable endpoint with a configurable auth token. Bypasses MaaS gateway — tests underlying model serving or compares MaaS-routed vs direct latency. |
-| `rate_limit_validation` | apply_rate_limit_subscription(rps_limit) → provision_api_key × N → send_requests → check_maas_metrics → [cleanup: delete keys + restore/delete MaaSSubscription] | `rate_limit_rps: 10`, `request_count: 100`, `concurrency: 20`, `key_count: 1` | `throughput_rps: "<= ${config.rate_limit_rps}"`, `error_rate_pct: "< 30"` | Creates a `MaaSSubscription` CR with a configured rate limit. Fires requests and asserts observed throughput stays at or below the limit. Metrics step confirms 429s are reflected in the metrics pipeline. Some 429s are expected. |
-| `metrics_fill` | provision_api_key → send_requests → check_maas_metrics → [cleanup: delete key] | `request_count: 200`, `concurrency: 10` | `error_rate_pct: "< 5"`, `metrics_request_count: ">= ${config.request_count * 0.95}"` | Sends a burst then reads and validates RHOAI/MaaS metrics. Confirms the metrics pipeline is populated correctly and counters are consistent with what was sent. `check_maas_metrics` always prints a human-readable summary to logs regardless of assertion pass/fail. |
+| `single_key_load` | provision_api_key → send_requests → [cleanup: delete key] | `request_count: 100`, `concurrency: 5` | `error_rate_pct: "< 5"`, `p99_latency_ms: "< 10000"` | Baseline load test — one key, N requests through MaaS. MaaS metrics polled in background automatically. |
+| `multi_key_load` | provision_api_key × N → send_requests (M reqs distributed across key pool) → [cleanup: delete all N keys] | `key_count: 5`, `request_count: 5`, `concurrency: 5` | `error_rate_pct: "< 5"` | M requests distributed evenly across N keys (floor(M/N) per key, remainder to first). Default M=N so each key gets exactly 1 probe. |
+| `direct_inference` | send_requests (url=target_url, token=target_token) — no key provisioning, no cleanup | `target_url: ""` (required), `target_token: ""` (required), `request_count: 50`, `concurrency: 5` | `error_rate_pct: "< 5"` | Send inference directly to any configurable endpoint. Bypasses MaaS gateway — tests underlying model serving or compares MaaS-routed vs direct latency. |
+| `rate_limit_validation` | apply_rate_limit_subscription(rps_limit) → provision_api_key × N → send_requests → [cleanup: delete keys + restore/delete MaaSSubscription] | `rate_limit_rps: 10`, `request_count: 100`, `concurrency: 20`, `key_count: 1` | `throughput_rps: "<= ${config.rate_limit_rps}"`, `error_rate_pct: "< 30"` | Creates a `MaaSSubscription` CR with a configured rate limit. Fires requests and asserts observed throughput stays at or below the limit. Some 429s are expected. |
+| `metrics_fill` | provision_api_key → send_requests → [cleanup: delete key] | `request_count: 200`, `concurrency: 10` | `error_rate_pct: "< 5"`, `total_requests: ">= ${config.metrics_min_requests}"` | Sends a burst and validates that RHOAI/MaaS metrics counters match what was sent. `total_requests` assertion evaluates against background-polled MaaS metrics. |
 
 **Design note**: Tasks are kept atomic and composable so future scenarios can reuse just `provision_api_key`, just `send_requests`, etc.
 
@@ -269,4 +300,4 @@ See [`docs/project/implementation-plan.md`](docs/project/implementation-plan.md)
 2. **Local harness**: `python -m harness.main --scenario single_key_load --run-id test-123` (needs real MaaS cluster env vars)
 3. **Local dev**: `make dev` — starts FastAPI dev server + Vite dev server; open browser, verify scenario list loads and assertion panel renders
 4. **Build**: `make build` — multi-stage Docker build (Node UI build → Python image)
-5. **End-to-end**: `make deploy` (`oc apply -k deploy/`) → open Route URL → pick scenario → edit config overrides in modal → start run → confirm logs appear within ~2 s and assertion panel updates in real-time → click "View" to open run detail page → verify results in history → verify no leftover `kratos-*` MaaS API keys → verify `MaaSSubscription` CR state restored after `rate_limit_validation`
+5. **End-to-end**: `make deploy` (`oc apply -k deploy/`) → open Route URL → pick scenario → edit config overrides in modal → start run → confirm task pipeline chips appear within ~2 s and update (RUNNING with progress bar → DONE green) → confirm logs stream and scroll smartly (scroll up to see "N new lines" badge) → confirm assertion panel updates independently → navigate away and back (browser back button should work via URL hash) → verify results in history → verify no leftover `kratos-*` MaaS API keys → verify `MaaSSubscription` CR state restored after `rate_limit_validation`
