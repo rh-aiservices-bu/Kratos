@@ -100,6 +100,10 @@ def create_job(scenario: str, run_id: str, config_overrides: dict | None = None)
     )
     batch.create_namespaced_job(namespace=NAMESPACE, body=job)
 
+    # Kick off log capture immediately so the thread is already waiting
+    # for the pod by the time the user opens the run detail page.
+    ensure_log_capture(run_id)
+
 
 # ---------------------------------------------------------------------------
 # Log capture: background thread writes pod stdout to disk.
@@ -118,12 +122,16 @@ def _capture_logs(run_id: str) -> None:
         core = k8s.CoreV1Api()
         label = f"kratos-run-id={run_id}"
 
+        # Wait for the pod to exist AND for its container to be running/finished.
         pod_name: str | None = None
-        for _ in range(30):  # wait up to 60 s for pod to appear
+        for _ in range(60):  # wait up to 120 s
             pods = core.list_namespaced_pod(namespace=NAMESPACE, label_selector=label)
             if pods.items:
-                pod_name = pods.items[0].metadata.name
-                break
+                pod = pods.items[0]
+                pod_name = pod.metadata.name
+                phase = (pod.status.phase or "") if pod.status else ""
+                if phase in ("Running", "Succeeded", "Failed"):
+                    break
             time.sleep(2)
 
         if pod_name is None:
@@ -136,12 +144,19 @@ def _capture_logs(run_id: str) -> None:
             follow=True,
             _preload_content=False,
         )
+        # Use a line buffer: stream() yields raw byte chunks, not full lines.
+        buf = ""
         with tmp_file.open("w", encoding="utf-8") as f:
             for raw in log_stream.stream():
-                line = raw.decode(errors="replace").rstrip()
-                if line:
+                buf += raw.decode(errors="replace")
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
                     f.write(line + "\n")
                     f.flush()
+            # Flush any trailing content without a final newline.
+            if buf:
+                f.write(buf + "\n")
+                f.flush()
 
     except Exception as exc:
         print(f"[k8s] log capture error for {run_id}: {exc}", flush=True)

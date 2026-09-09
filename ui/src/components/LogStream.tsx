@@ -55,12 +55,14 @@ export function LogStream({ runId, onAssertionUpdate }: Props) {
     let offset = 0;
 
     async function poll() {
+      let consecutiveErrors = 0;
       while (active) {
         try {
           const res = await fetch(`/api/runs/${runId}/logs/lines?offset=${offset}`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
           const data = (await res.json()) as LogPollResponse;
+          consecutiveErrors = 0;
 
           if (data.lines.length > 0) {
             setStatus('streaming');
@@ -86,8 +88,12 @@ export function LogStream({ runId, onAssertionUpdate }: Props) {
             return;
           }
         } catch {
-          setStatus('error');
-          return;
+          consecutiveErrors++;
+          if (consecutiveErrors >= 10) {
+            setStatus('error');
+            return;
+          }
+          // Transient error — keep retrying silently.
         }
 
         await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS));

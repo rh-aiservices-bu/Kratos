@@ -28,6 +28,18 @@ function formatValue(v: number | null): string {
   return v.toFixed(2);
 }
 
+function formatName(name: string): string {
+  return name
+    .replace(/_pct$/i, '_percent')
+    .replace(/_ms$/i, ' (ms)')
+    .replace(/_rps$/i, ' (rps)')
+    .replace(/_percent$/i, ' (%)')
+    .replace(/_/g, ' ')
+    .replace(/\bp(\d+)\b/gi, 'P$1')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
+}
+
 export function AssertionPanel({ assertions }: Props) {
   if (assertions.length === 0) {
     return (
@@ -58,7 +70,7 @@ export function AssertionPanel({ assertions }: Props) {
                 } as React.CSSProperties
               }
             >
-              <span className="kratos-assertion-card__name">{a.name}</span>
+              <span className="kratos-assertion-card__name">{formatName(a.name)}</span>
               <span className="kratos-assertion-card__value">{formatValue(a.value)}</span>
               {a.expression && (
                 <span className="kratos-assertion-card__expr">target: {a.expression}</span>
