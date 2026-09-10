@@ -52,7 +52,8 @@ def load_scenario(path: str) -> dict:
     resolved_tasks = []
     for task in raw.get("tasks", []) or []:
         resolved_params = _resolve(task.get("params") or {}, merged_config)
-        resolved_tasks.append({**task, "params": resolved_params})
+        resolved_task_assertions = _resolve(task.get("assertions") or {}, merged_config)
+        resolved_tasks.append({**task, "params": resolved_params, "assertions": resolved_task_assertions})
 
     resolved_assertions = _resolve(raw.get("assertions") or {}, merged_config)
 
