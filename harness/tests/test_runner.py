@@ -440,6 +440,71 @@ def test_per_task_metrics_assertion_settles_instead_of_failing_instantly(
         REGISTRY.pop("_send_like_task", None)
 
 
+def test_task_progress_stays_visible_during_settle_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test: shared_state["task_progress"] must not be popped until AFTER
+    a task's metrics-dependent assertion finishes settling, otherwise the UI's task
+    progress bar vanishes for the whole settle window (still shown as RUNNING, but
+    with no progress data to render) and only reappears once the task is finally
+    marked DONE.
+    """
+    from harness import runner as runner_module
+
+    shared_state_ref: list[dict] = []
+    progress_present_during_poll: list[bool] = []
+    calls: list[None] = []
+
+    async def fake_fetch_metrics(base_url: str, queries: dict, token: str) -> dict:
+        calls.append(None)
+        n = len(calls)
+        if n > 1:  # skip the pre-run baseline fetch
+            progress_present_during_poll.append("task_progress" in shared_state_ref[0])
+        return {"total_requests": 10.0} if n == 1 else {"total_requests": 20.0}
+
+    monkeypatch.setattr(runner_module, "fetch_metrics", fake_fetch_metrics)
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_MAX_WAIT_S", 5.0)
+
+    class _ProgressTask(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            shared_state_ref.append(ctx.shared_state)
+            ctx.shared_state["task_progress"] = {"current": 5, "total": 5}
+            ctx.shared_state["inference_results"] = {"total_requests": 10.0}
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            pass
+
+    REGISTRY["_progress_task"] = _ProgressTask
+
+    try:
+        path = _write(tmp_path, """
+            name: test_progress_visible
+            config:
+              MAAS_METRICS_URL: "http://thanos.test/api/v1/query"
+              MAAS_METRICS_QUERIES: '{"total_requests": "sum(foo)"}'
+            tasks:
+              - name: _progress_task
+                params: {}
+                assertions:
+                  maas_requests_match:
+                    compare: metrics.total_requests_delta
+                    to: inference_results.total_requests
+                    tolerance_pct: 5
+            assertions: {}
+        """)
+        result = asyncio.run(ScenarioRunner(path, "progress-visible-001").run())
+
+        assert result.status == "PASS"
+        assert progress_present_during_poll, "settle loop never actually polled"
+        assert all(progress_present_during_poll), (
+            "task_progress was popped from shared_state before settling finished"
+        )
+    finally:
+        REGISTRY.pop("_progress_task", None)
+
+
 def test_metrics_polling_disabled_without_config(tmp_path: Path) -> None:
     """No MAAS_METRICS_URL/QUERIES configured: match assertion stays PENDING, run still passes."""
     path = _write(tmp_path, """

@@ -55,6 +55,8 @@ assertions:
 
 **Harness-side ground truth**: `send_requests` now captures `response.usage.total_tokens` from each successful inference call and accumulates it into `shared_state["inference_results"]["total_tokens_sent"]`, giving a token-count comparison target that didn't previously exist.
 
+**A UI side-effect of settling being genuinely slower now**: once a task's per-task assertions can take up to `max_wait_s` to settle (attempt #5 above), `shared_state["task_progress"]` — which the UI's per-task progress bar reads — was still being popped (frozen into its DONE-chip snapshot) the instant `task.run()` returned, *before* settling started. Since the task isn't appended to `task_results` (and so isn't shown as DONE) until settling finishes, this left a real window — up to `max_wait_s` — where the UI showed the task as RUNNING but had no progress data left to render, so the bar vanished and only reappeared once settling finished and the chip flipped to DONE. Fixed by moving the pop to after settling completes, so the bar stays visible for the whole wait.
+
 ## Consequences
 
 **Positive:**

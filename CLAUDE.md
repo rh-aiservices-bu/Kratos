@@ -141,7 +141,7 @@ class Task(ABC):
 ```
 - `TaskContext` carries: `maas_api_url`, `sa_token`, `shared_state: dict`, resolved config, and an `emit_assertion_state()` helper
 - `shared_state` is how tasks pass data forward — e.g. `provision_api_key` writes created key IDs into `shared_state["api_keys"]`; the cleanup reads and deletes them all
-- Tasks report within-task progress by writing `shared_state["task_progress"] = {"current": N, "total": M}` before calling `emit_assertion_state()`. The runner snapshots and clears this when the task completes, preserving the final count for display.
+- Tasks report within-task progress by writing `shared_state["task_progress"] = {"current": N, "total": M}` before calling `emit_assertion_state()`. The runner snapshots and clears this once the task is *fully* done — including settling any metrics-dependent per-task assertions (see Background Metrics Polling below) — not the instant `task.run()` returns, so the UI's progress bar stays visible for the whole time a task with such assertions is settling, not just up to when its own work finished.
 - `emit_assertion_state()` is called by tasks after every atomic operation that produces metric data (e.g. after each inference request in `send_requests`, after each key in `provision_api_key`). It re-evaluates all assertions against the current `shared_state` and writes the result to `/data/results/<run-id>-assertions.json` (PVC file, NOT stdout). Emission is debounced (at most every 100ms). It also writes the current task progress to `/data/results/<run-id>-progress.json`.
 - **Cleanup runs after ALL tasks complete (or fail) — not per-task.** This is intentional: lets you observe the effect of many accumulated keys/resources before cleanup
 
@@ -277,6 +277,8 @@ assertions:
     max_wait_s: 65   # optional; all match-form assertions in a scenario share one settle loop, so the max configured value across them wins
 ```
 
+**Task progress stays visible while settling.** `shared_state["task_progress"]` is popped (frozen into the DONE chip's final snapshot) only *after* a task's per-task assertions finish settling, not the instant `task.run()` returns — settling can take up to `max_wait_s`, and popping it early left the UI showing the task as RUNNING but with no progress data to render for that whole window, so the progress bar vanished and only reappeared once the task was finally marked DONE (confirmed live, then fixed and covered by `test_task_progress_stays_visible_during_settle_wait` in `harness/tests/test_runner.py`).
+
 The `check_maas_metrics` task class still exists and can be added to a scenario's task list if an explicit final check with a log summary is wanted. Standard scenarios no longer include it.
 
 ### Task Progress UI
@@ -284,7 +286,7 @@ The `check_maas_metrics` task class still exists and can be added to a scenario'
 The run detail page shows a horizontal **task pipeline** above the logs. Each chip displays:
 - Status icon: `○` PENDING | CSS spinner RUNNING | `✓` DONE | `✗` FAIL
 - Task name (snake_case → Title Case)
-- A mini progress bar + `{current} / {total}` label when the task reports `shared_state["task_progress"]` — visible during RUNNING and preserved on completion (at 100% for DONE, actual for FAIL)
+- A mini progress bar + `{current} / {total}` label when the task reports `shared_state["task_progress"]` — visible during RUNNING (including while a task's per-task assertions are settling, see Background Metrics Polling above) and preserved on completion (at 100% for DONE, actual for FAIL)
 
 Chip background colours: grey (PENDING), blue tint (RUNNING), green (DONE), red (FAIL).
 
@@ -333,4 +335,4 @@ See [`docs/project/implementation-plan.md`](docs/project/implementation-plan.md)
 3. **Local dev**: `make dev` — starts FastAPI dev server + Vite dev server; open browser, verify scenario list loads and assertion panel renders
 4. **Build**: `make build` — multi-stage Docker build (Node UI build → Python image)
 5. **End-to-end**: `make deploy` (`oc apply -k deploy/`) → open Route URL → pick scenario → edit config overrides in modal → start run → confirm task pipeline chips appear within ~2 s and update (RUNNING with progress bar → DONE green) → confirm logs stream and scroll smartly (scroll up to see "N new lines" badge) → confirm assertion panel updates independently → navigate away and back (browser back button should work via URL hash) → verify results in history → verify no leftover `kratos-*` MaaS API keys → verify `MaaSSubscription` CR state restored after `rate_limit_validation`
-6. **MaaS metrics cross-check specifically**: run `metrics_fill` (needs `MAAS_METRICS_URL`/`MAAS_METRICS_QUERIES` set and `deploy/rbac-monitoring.yaml` applied) → confirm `maas_requests_match`/`maas_tokens_match` go PASSING, not just `error_rate_pct` — these only appear on `metrics_fill`'s run page, not on other scenarios' (they aren't in those scenarios' `assertions:` blocks). Confirmed working end-to-end on `cluster-rkmhx.rkmhx.sandbox1230.opentlc.com`.
+6. **MaaS metrics cross-check specifically**: run `metrics_fill` (needs `MAAS_METRICS_URL`/`MAAS_METRICS_QUERIES` set and `deploy/rbac-monitoring.yaml` applied) → confirm `maas_requests_match`/`maas_tokens_match` go PASSING, not just `error_rate_pct` — these only appear on `metrics_fill`'s run page, not on other scenarios' (they aren't in those scenarios' `assertions:` blocks) — while settling, `send_requests`'s progress bar should stay visible the whole time rather than disappearing and popping back at the end. Confirmed working end-to-end on `cluster-rkmhx.rkmhx.sandbox1230.opentlc.com`.

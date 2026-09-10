@@ -254,10 +254,12 @@ class ScenarioRunner:
             start = time.monotonic()
             try:
                 result = await task.run(ctx)
-                tp = shared_state.pop("task_progress", None)
-                if tp:
-                    task_completed_progress[task.name] = tp
                 if current_task_assertions:
+                    # Settling can take a while (up to max_wait_s) — leave
+                    # shared_state["task_progress"] in place until it's done, so the
+                    # UI keeps showing the task's last known progress bar throughout
+                    # the wait instead of it vanishing the instant task.run() returns
+                    # and only reappearing once the task is finally marked DONE below.
                     task_assertion_results = await _settle_and_evaluate(
                         current_task_assertions, max_wait_s
                     )
@@ -265,6 +267,9 @@ class ScenarioRunner:
                     if result.status == "PASS" and any(a.status == "FAILING" for a in task_assertion_results):
                         result.status = "FAIL"
                         result.error = "assertions failed at task completion"
+                tp = shared_state.pop("task_progress", None)
+                if tp:
+                    task_completed_progress[task.name] = tp
                 task_results.append(result)
                 if result.status == "FAIL":
                     run_failed = True
