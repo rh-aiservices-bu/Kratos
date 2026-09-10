@@ -1,7 +1,7 @@
 import httpx
 from pytest_httpx import HTTPXMock
 
-from harness.metrics_client import fetch_metrics, parse_queries
+from harness.metrics_client import fetch_metrics
 
 _BASE = "http://thanos.test/api/v1/query"
 
@@ -9,22 +9,6 @@ _BASE = "http://thanos.test/api/v1/query"
 def _q(query: str) -> str:
     """Build the exact URL httpx will request for a given PromQL query string."""
     return str(httpx.URL(_BASE, params={"query": query}))
-
-
-def test_parse_queries_valid_json() -> None:
-    assert parse_queries('{"total_requests": "sum(foo)"}') == {"total_requests": "sum(foo)"}
-
-
-def test_parse_queries_empty_string() -> None:
-    assert parse_queries("") == {}
-
-
-def test_parse_queries_invalid_json() -> None:
-    assert parse_queries("not json") == {}
-
-
-def test_parse_queries_non_dict_json() -> None:
-    assert parse_queries("[1, 2, 3]") == {}
 
 
 async def test_fetch_metrics_no_base_url() -> None:
@@ -59,6 +43,19 @@ async def test_fetch_metrics_multiple_queries(httpx_mock: HTTPXMock) -> None:
         "token",
     )
     assert result == {"total_requests": 10.0, "total_tokens": 500.0}
+
+
+async def test_fetch_metrics_scalar_result_type(httpx_mock: HTTPXMock) -> None:
+    """A query with no metric selector (e.g. a bare ${harness.x}-substituted literal,
+    ADR-015's promql pass-through form) evaluates to resultType "scalar", whose
+    result is a bare [timestamp, value] pair rather than a list of series."""
+    httpx_mock.add_response(
+        url=_q("2.5"),
+        json={"data": {"resultType": "scalar", "result": [1234567890, "2.5"]}},
+    )
+
+    result = await fetch_metrics(_BASE, {"error_rate_pct": "2.5"}, "token")
+    assert result == {"error_rate_pct": 2.5}
 
 
 async def test_fetch_metrics_empty_result_omitted(httpx_mock: HTTPXMock) -> None:

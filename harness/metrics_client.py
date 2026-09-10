@@ -4,35 +4,38 @@ Used by both the background poller (harness/runner.py) and the optional explicit
 check_maas_metrics task (harness/tasks/metrics.py) so there's a single place that knows
 how to talk to Thanos Querier / Prometheus and parse its response shape.
 
-See docs/architecture/adrs/ADR-014-maas-metrics-cross-validation.md for the confirmed
-real MAAS_METRICS_URL/MAAS_METRICS_QUERIES values.
+See docs/architecture/adrs/ADR-014-maas-metrics-cross-validation.md and ADR-015 for
+the confirmed real MAAS_METRICS_URL / metrics_queries values.
 """
 
-import json
 import traceback
 from typing import Any
 
 import httpx
 
 
-def parse_queries(raw: str) -> dict[str, str]:
-    """Parse the MAAS_METRICS_QUERIES config value (a JSON dict of name -> PromQL query)."""
-    try:
-        parsed = json.loads(raw) if raw else {}
-    except (TypeError, ValueError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
 def _extract_scalar(response_json: dict[str, Any]) -> float | None:
     """Extract a single scalar value from a Prometheus instant-query response.
 
-    Expected shape: {"data": {"result": [{"value": [<timestamp>, "<value>"]}]}}
+    A query with a metric selector (e.g. sum(authorized_calls{...})) evaluates to an
+    instant vector: {"data": {"resultType": "vector", "result": [{"value": [ts, "v"]}]}}.
+    A pure-arithmetic expression with no metric selector at all — a bare number, or a
+    promql-form assertion whose whole text is a substituted ${harness.x}/${baseline.x}
+    literal (see ADR-015) — evaluates to a scalar instead:
+    {"data": {"resultType": "scalar", "result": [ts, "v"]}}, a bare 2-element array
+    rather than a list of series. Handle both, since scenario authors are free to write
+    either kind of PromQL.
     """
-    result = (response_json.get("data") or {}).get("result") or []
+    data = response_json.get("data") or {}
+    result = data.get("result")
     if not result:
         return None
-    value = result[0].get("value")
+    if data.get("resultType") == "scalar":
+        value = result
+    elif isinstance(result, list):
+        value = result[0].get("value")
+    else:
+        return None
     if not value or len(value) < 2:
         return None
     try:

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from harness.result import TaskResult
 
@@ -15,6 +15,7 @@ class TaskContext:
     config: dict
     assertions: dict[str, str | dict]
     emit_assertion_state: Callable[[], Awaitable[None]]
+    metrics_queries: dict[str, str] = field(default_factory=dict)
 
 
 class Task(ABC):

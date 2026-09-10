@@ -11,6 +11,17 @@ config:
   # harness/runner.py) assumes a ~30s scrape interval; raise this if your cluster's
   # is longer or scrapes are less reliable under load.
   metrics_max_wait_s: 65
+  # Kuadrant/Limitador scopes its gateway counters by the target model's HTTPRoute
+  # name — verified live against cluster-rkmhx.rkmhx.sandbox1230.opentlc.com (see
+  # ADR-014). Update this if DEFAULT_MODEL ever changes.
+  limitador_namespace: "llm/facebook-opt-125m-simulated-kserve-route"
+# Named PromQL queries this scenario depends on — baseline-snapshotted before the
+# task loop starts and re-polled every 5s, same as before ADR-015, just declared
+# here instead of the global ConfigMap's MAAS_METRICS_QUERIES so the query text
+# lives next to the assertions that use it. Referenced below via ${baseline.<name>}.
+metrics_queries:
+  total_requests: 'sum(authorized_calls{limitador_namespace="${config.limitador_namespace}"})'
+  total_tokens: 'sum(authorized_hits{limitador_namespace="${config.limitador_namespace}"})'
 tasks:
   - name: provision_api_key
     params:
@@ -22,15 +33,30 @@ tasks:
       prompt: "${config.prompt}"
       key_pool: true
     assertions:
-      error_rate_pct: "< 5"
+      error_rate_pct:
+        promql: "${harness.inference_results.error_rate_pct}"
+        expect: "< 5"
+      # Self-contained PromQL cross-check (ADR-015): ${baseline.total_requests} nets
+      # out the pre-run counter value and ${harness.inference_results.total_requests}
+      # splices in the harness's own sent-count, so the whole "does MaaS's reported
+      # delta match what we actually sent, within tolerance" check is one expression
+      # evaluated by Prometheus itself, using <bool> to fold the comparison into 0/1.
       maas_requests_match:
-        compare: metrics.total_requests_delta
-        to: inference_results.total_requests
-        tolerance_pct: "${config.metrics_tolerance_pct}"
+        promql: >-
+          abs(
+            (sum(authorized_calls{limitador_namespace="${config.limitador_namespace}"}) - ${baseline.total_requests})
+            - ${harness.inference_results.total_requests}
+          )
+          <= bool (${config.metrics_tolerance_pct} / 100 * clamp_min(${harness.inference_results.total_requests}, 1))
+        expect: "== 1"
         max_wait_s: "${config.metrics_max_wait_s}"
       maas_tokens_match:
-        compare: metrics.total_tokens_delta
-        to: inference_results.total_tokens_sent
-        tolerance_pct: "${config.metrics_tolerance_pct}"
+        promql: >-
+          abs(
+            (sum(authorized_hits{limitador_namespace="${config.limitador_namespace}"}) - ${baseline.total_tokens})
+            - ${harness.inference_results.total_tokens_sent}
+          )
+          <= bool (${config.metrics_tolerance_pct} / 100 * clamp_min(${harness.inference_results.total_tokens_sent}, 1))
+        expect: "== 1"
         max_wait_s: "${config.metrics_max_wait_s}"
 cleanup: automatic

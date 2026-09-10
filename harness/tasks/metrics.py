@@ -1,6 +1,6 @@
 import time
 
-from harness.metrics_client import fetch_metrics, parse_queries
+from harness.metrics_client import fetch_metrics
 from harness.result import TaskResult
 from harness.tasks.base import Task, TaskContext
 from harness.tasks.registry import REGISTRY
@@ -19,9 +19,7 @@ class CheckMaasMetricsTask(Task):
         start = time.monotonic()
 
         metrics_url = self.params.get("metrics_url") or ctx.config.get("MAAS_METRICS_URL", "")
-        queries = parse_queries(
-            self.params.get("queries") or ctx.config.get("MAAS_METRICS_QUERIES", "")
-        )
+        queries = self.params.get("queries") or ctx.metrics_queries
 
         if metrics_url and queries:
             raw = await fetch_metrics(metrics_url, queries, ctx.sa_token)

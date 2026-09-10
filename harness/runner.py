@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import time
 import traceback
 from pathlib import Path
@@ -20,7 +21,7 @@ def _read_sa_token(config: dict) -> str:
         return ""
 
 from harness.config import load_scenario
-from harness.metrics_client import fetch_metrics, parse_queries
+from harness.metrics_client import fetch_metrics
 from harness.result import (
     AssertionResult,
     RunResult,
@@ -68,6 +69,78 @@ def _configured_max_wait_s(assertions: dict, task_defs: list[dict]) -> float:
             if isinstance(spec, dict) and "max_wait_s" in spec
         )
     return max(values) if values else _METRICS_FINAL_MAX_WAIT_S
+
+
+# Template variables a promql-form assertion can reference, in addition to
+# ${config.x} (already resolved by harness/config.py at scenario-load time, before
+# either regex below ever sees the text):
+#   ${baseline.<name>}          — a name from this scenario's metrics_queries, as
+#                                  snapshotted before the task loop started
+#   ${harness.<namespace>.<key>} — a live shared_state value (e.g.
+#                                  inference_results.total_requests)
+# See ADR-015 for why these resolve on two different schedules (baseline once,
+# harness every poll tick) rather than both being handled by config.py's loader.
+_BASELINE_VAR_RE = re.compile(r"\$\{baseline\.([A-Za-z0-9_]+)\}")
+_HARNESS_VAR_RE = re.compile(r"\$\{harness\.([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)\}")
+
+
+def _collect_promql_assertions(assertions: dict, task_defs: list[dict]) -> dict[str, str]:
+    """Return {assertion_name: promql_template} for every promql-form assertion,
+    scenario-level and per-task, so the runner can poll each as its own ad hoc query
+    alongside the scenario's named metrics_queries.
+    """
+    collected: dict[str, str] = {}
+    for name, spec in assertions.items():
+        if isinstance(spec, dict) and "promql" in spec:
+            collected[name] = spec["promql"]
+    for task_def in task_defs:
+        for name, spec in (task_def.get("assertions") or {}).items():
+            if isinstance(spec, dict) and "promql" in spec:
+                collected[name] = spec["promql"]
+    return collected
+
+
+def _substitute_baseline_vars(template: str, baseline: dict[str, float]) -> str:
+    """Resolve ${baseline.<name>} references against the pre-run metrics snapshot.
+
+    Runs once, right after the baseline fetch — unlike ${harness.*}, baseline values
+    never change during a run, so there's no need to re-resolve them on every tick.
+    """
+
+    def _sub(m: re.Match) -> str:
+        key = m.group(1)
+        if key not in baseline:
+            raise KeyError(
+                f"${{baseline.{key}}} referenced but {key!r} is not one of this "
+                f"scenario's metrics_queries: {sorted(baseline)}"
+            )
+        return str(float(baseline[key]))
+
+    return _BASELINE_VAR_RE.sub(_sub, template)
+
+
+def _substitute_harness_vars(template: str, shared_state: dict) -> str | None:
+    """Resolve ${harness.<namespace>.<key>} references against live shared_state.
+
+    Unlike ${config.x}/${baseline.x} (resolved once), these change continuously
+    during a run, so this re-runs on every poll tick right before firing the query.
+    Returns None if any referenced value isn't populated yet — tells the caller to
+    skip firing this tick's query entirely (the assertion stays PENDING) rather than
+    substituting a bogus placeholder value.
+    """
+    missing = False
+
+    def _sub(m: re.Match) -> str:
+        nonlocal missing
+        namespace, key = m.group(1), m.group(2)
+        ns = shared_state.get(namespace, {})
+        if not isinstance(ns, dict) or key not in ns:
+            missing = True
+            return ""
+        return str(float(ns[key]))
+
+    resolved = _HARNESS_VAR_RE.sub(_sub, template)
+    return None if missing else resolved
 
 
 class ScenarioRunner:
@@ -169,14 +242,30 @@ class ScenarioRunner:
 
         sa_token = _read_sa_token(config)
         metrics_url: str = config.get("MAAS_METRICS_URL", "")
-        metrics_queries: dict[str, str] = parse_queries(config.get("MAAS_METRICS_QUERIES", ""))
-        metrics_enabled = bool(metrics_url and metrics_queries)
+        metrics_queries: dict[str, str] = scenario.get("metrics_queries") or {}
+        # Promql-form assertions (see harness/result.py:_evaluate_promql_assertion)
+        # each fire their own ad hoc query, in addition to the named metrics_queries
+        # above. promql_after_baseline holds each template with ${baseline.x} already
+        # resolved (once, right after the baseline fetch below); ${harness.x} is
+        # re-resolved every poll tick in _fetch_metrics_once, since those values
+        # change continuously during the run.
+        promql_templates: dict[str, str] = _collect_promql_assertions(assertions, task_defs)
+        promql_after_baseline: dict[str, str] = dict(promql_templates)
+        metrics_enabled = bool(metrics_url and (metrics_queries or promql_templates))
 
         async def _fetch_metrics_once() -> None:
             if not metrics_enabled:
                 return
+            resolved_assertion_queries: dict[str, str] = {}
+            for name, tmpl in promql_after_baseline.items():
+                resolved = _substitute_harness_vars(tmpl, shared_state)
+                if resolved is not None:
+                    resolved_assertion_queries[name] = resolved
+            all_queries = {**metrics_queries, **resolved_assertion_queries}
+            if not all_queries:
+                return
             try:
-                raw = await fetch_metrics(metrics_url, metrics_queries, sa_token)
+                raw = await fetch_metrics(metrics_url, all_queries, sa_token)
             except Exception as exc:
                 print(f"[runner] metrics poll error: {exc}", flush=True)
                 return
@@ -226,6 +315,7 @@ class ScenarioRunner:
             config=config,
             assertions=assertions,
             emit_assertion_state=emit,
+            metrics_queries=metrics_queries,
         )
 
         tasks: list[Task] = []
@@ -244,6 +334,10 @@ class ScenarioRunner:
             baseline = await fetch_metrics(metrics_url, metrics_queries, sa_token)
             if baseline:
                 shared_state["metrics_baseline"] = baseline
+            promql_after_baseline = {
+                name: _substitute_baseline_vars(tmpl, baseline or {})
+                for name, tmpl in promql_templates.items()
+            }
             metrics_bg = asyncio.create_task(_metrics_bg())
 
         for i, (task, task_def) in enumerate(zip(tasks, task_defs)):

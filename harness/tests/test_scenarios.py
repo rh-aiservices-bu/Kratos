@@ -1,4 +1,5 @@
 import pathlib
+import re
 
 import pytest
 import yaml
@@ -11,6 +12,11 @@ _SCENARIO_PATHS = sorted(
     p for p in _SCENARIO_DIR.glob("*.yaml") if not p.stem.startswith("stub")
 )
 _REQUIRED_FIELDS = {"name", "description", "tasks", "cleanup"}
+# ${baseline.x}/${harness.x} (ADR-015) are deliberately left unresolved by
+# load_scenario() — the runner resolves them later, on its own schedule (baseline
+# once after the pre-run snapshot, harness on every poll tick) — so they're expected
+# to survive here, unlike ${config.x}, which must always be fully resolved by load time.
+_ALLOWED_UNRESOLVED_PREFIXES = ("${baseline.", "${harness.")
 
 
 def test_exactly_five_production_scenarios() -> None:
@@ -40,9 +46,10 @@ def test_scenario_has_required_fields(path: pathlib.Path) -> None:
 def test_scenario_loads_and_resolves(path: pathlib.Path) -> None:
     scenario = load_scenario(str(path))
     resolved_str = str(scenario)
-    assert "${" not in resolved_str, (
-        f"{path.name}: unresolved placeholders remain after load_scenario"
-    )
+    for token in re.findall(r"\$\{[^}]+\}", resolved_str):
+        assert token.startswith(_ALLOWED_UNRESOLVED_PREFIXES), (
+            f"{path.name}: unresolved placeholder {token!r} remains after load_scenario"
+        )
 
 
 @pytest.mark.parametrize("path", _SCENARIO_PATHS, ids=[p.stem for p in _SCENARIO_PATHS])

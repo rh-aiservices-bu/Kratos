@@ -18,7 +18,7 @@ spec:
       serviceAccountName: kratos
       containers:
         - name: api
-          image: quay.io/willsparker/kratos:latest
+          image: quay.io/rlundber/kratos:0.1
           ports:
             - containerPort: 8000
           envFrom:

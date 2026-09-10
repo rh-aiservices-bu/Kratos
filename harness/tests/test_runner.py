@@ -209,7 +209,8 @@ def test_metrics_baseline_delta_feeds_match_assertion(
             name: test_metrics_delta
             config:
               MAAS_METRICS_URL: "http://thanos.test/api/v1/query"
-              MAAS_METRICS_QUERIES: '{"total_requests": "sum(foo)"}'
+            metrics_queries:
+              total_requests: "sum(foo)"
             tasks:
               - name: _expect_sent_count
                 params: {}
@@ -285,7 +286,8 @@ def test_scenario_max_wait_s_overrides_default_cap(
         name: test_max_wait_override
         config:
           MAAS_METRICS_URL: "http://thanos.test/api/v1/query"
-          MAAS_METRICS_QUERIES: '{"total_requests": "sum(foo)"}'
+        metrics_queries:
+          total_requests: "sum(foo)"
         tasks:
           - name: stub_pass
             params: {}
@@ -350,7 +352,8 @@ def test_settle_and_evaluate_polls_until_assertion_actually_passes(
             name: test_settle_until_pass
             config:
               MAAS_METRICS_URL: "http://thanos.test/api/v1/query"
-              MAAS_METRICS_QUERIES: '{"total_requests": "sum(foo)"}'
+            metrics_queries:
+              total_requests: "sum(foo)"
             tasks:
               - name: _expect_sent_count_2
                 params: {}
@@ -417,7 +420,8 @@ def test_per_task_metrics_assertion_settles_instead_of_failing_instantly(
             name: test_per_task_settle
             config:
               MAAS_METRICS_URL: "http://thanos.test/api/v1/query"
-              MAAS_METRICS_QUERIES: '{"total_requests": "sum(foo)"}'
+            metrics_queries:
+              total_requests: "sum(foo)"
             tasks:
               - name: _send_like_task
                 params: {}
@@ -483,7 +487,8 @@ def test_task_progress_stays_visible_during_settle_wait(
             name: test_progress_visible
             config:
               MAAS_METRICS_URL: "http://thanos.test/api/v1/query"
-              MAAS_METRICS_QUERIES: '{"total_requests": "sum(foo)"}'
+            metrics_queries:
+              total_requests: "sum(foo)"
             tasks:
               - name: _progress_task
                 params: {}
@@ -523,6 +528,111 @@ def test_metrics_polling_disabled_without_config(tmp_path: Path) -> None:
     assert result.status == "PASS"
     assertion = {a.name: a for a in result.assertions}["maas_requests_match"]
     assert assertion.status == "PENDING"
+
+
+def test_substitute_baseline_vars_unit() -> None:
+    from harness.runner import _substitute_baseline_vars
+
+    assert (
+        _substitute_baseline_vars("sum(foo) - ${baseline.total_requests}", {"total_requests": 10.0})
+        == "sum(foo) - 10.0"
+    )
+    # A template with no ${baseline.x} at all is returned unchanged.
+    assert _substitute_baseline_vars("sum(foo)", {}) == "sum(foo)"
+
+
+def test_substitute_baseline_vars_raises_on_unknown_name() -> None:
+    from harness.runner import _substitute_baseline_vars
+
+    with pytest.raises(KeyError, match="total_requests"):
+        _substitute_baseline_vars("sum(foo) - ${baseline.total_requests}", {})
+
+
+def test_substitute_harness_vars_unit() -> None:
+    from harness.runner import _substitute_harness_vars
+
+    state = {"inference_results": {"total_requests": 45.0}}
+    resolved = _substitute_harness_vars(
+        "abs(x - ${harness.inference_results.total_requests})", state
+    )
+    assert resolved == "abs(x - 45.0)"
+
+
+def test_substitute_harness_vars_returns_none_when_missing() -> None:
+    from harness.runner import _substitute_harness_vars
+
+    assert _substitute_harness_vars("x - ${harness.inference_results.total_requests}", {}) is None
+
+
+def test_promql_assertion_resolves_baseline_and_harness_templates_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The full ADR-015 wiring: a promql-form assertion referencing ${baseline.x}
+    (resolved once from the scenario's metrics_queries baseline snapshot) and
+    ${harness.x} (resolved fresh each tick from live shared_state) ends up PASSING
+    once both are populated, without the runner needing any query-specific code.
+    """
+    from harness import runner as runner_module
+
+    seen_queries: list[dict] = []
+    calls: list[None] = []
+
+    async def fake_fetch_metrics(base_url: str, queries: dict, token: str) -> dict:
+        calls.append(None)
+        seen_queries.append(dict(queries))
+        if len(calls) == 1:
+            return {"total_requests": 10.0}  # baseline
+        return {"total_requests": 55.0, "maas_requests_match": 1.0}
+
+    monkeypatch.setattr(runner_module, "fetch_metrics", fake_fetch_metrics)
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_MAX_WAIT_S", 0.05)
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_POLL_INTERVAL_S", 0.01)
+
+    class _ExpectSentCount(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            ctx.shared_state["inference_results"] = {"total_requests": 45.0}
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            pass
+
+    REGISTRY["_promql_template_task"] = _ExpectSentCount
+
+    try:
+        path = _write(tmp_path, """
+            name: test_promql_templating
+            config:
+              MAAS_METRICS_URL: "http://thanos.test/api/v1/query"
+            metrics_queries:
+              total_requests: "sum(foo)"
+            tasks:
+              - name: _promql_template_task
+                params: {}
+            assertions:
+              maas_requests_match:
+                promql: "abs(sum(foo) - ${baseline.total_requests} - ${harness.inference_results.total_requests}) <= bool 0"
+                expect: "== 1"
+        """)
+        result = asyncio.run(ScenarioRunner(path, "promql-template-001").run())
+
+        assert result.status == "PASS"
+        assertion = {a.name: a for a in result.assertions}["maas_requests_match"]
+        assert assertion.status == "PASSING"
+        assert assertion.current_value == 1.0
+
+        # The pre-run baseline fetch only ever queries the named metrics_queries —
+        # promql-form assertions aren't part of it (there's nothing to baseline-
+        # substitute against yet).
+        assert seen_queries[0] == {"total_requests": "sum(foo)"}
+        # Once inference_results is populated, both template variables resolve to
+        # literals in the fired query text.
+        assert any(
+            q.get("maas_requests_match")
+            == "abs(sum(foo) - 10.0 - 45.0) <= bool 0"
+            for q in seen_queries[1:]
+        )
+    finally:
+        REGISTRY.pop("_promql_template_task", None)
 
 
 def test_unknown_task_raises(tmp_path: Path) -> None:

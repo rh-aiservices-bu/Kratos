@@ -1,4 +1,4 @@
-IMAGE ?= quay.io/willsparker/kratos:latest
+IMAGE ?= quay.io/rlundber/kratos:0.1
 SCENARIOS_DIR ?= scenarios
 
 .PHONY: lint test build push deploy dev clean

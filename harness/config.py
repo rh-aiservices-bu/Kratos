@@ -56,10 +56,12 @@ def load_scenario(path: str) -> dict:
         resolved_tasks.append({**task, "params": resolved_params, "assertions": resolved_task_assertions})
 
     resolved_assertions = _resolve(raw.get("assertions") or {}, merged_config)
+    resolved_metrics_queries = _resolve(raw.get("metrics_queries") or {}, merged_config)
 
     return {
         **raw,
         "tasks": resolved_tasks,
         "assertions": resolved_assertions,
+        "metrics_queries": resolved_metrics_queries,
         "_resolved_config": merged_config,
     }

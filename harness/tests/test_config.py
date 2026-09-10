@@ -98,6 +98,31 @@ def test_missing_key_raises(tmp_path: Path) -> None:
         load_scenario(path)
 
 
+def test_interpolation_in_metrics_queries(tmp_path: Path) -> None:
+    path = _write(tmp_path, """
+        name: test
+        config:
+          limitador_namespace: "llm/some-route"
+        tasks: []
+        metrics_queries:
+          total_requests: 'sum(authorized_calls{limitador_namespace="${config.limitador_namespace}"})'
+        assertions: {}
+    """)
+    s = load_scenario(path)
+    assert s["metrics_queries"]["total_requests"] == 'sum(authorized_calls{limitador_namespace="llm/some-route"})'
+
+
+def test_metrics_queries_defaults_to_empty_dict(tmp_path: Path) -> None:
+    path = _write(tmp_path, """
+        name: test
+        config: {}
+        tasks: []
+        assertions: {}
+    """)
+    s = load_scenario(path)
+    assert s["metrics_queries"] == {}
+
+
 def test_no_interpolation_in_non_string_values(tmp_path: Path) -> None:
     path = _write(tmp_path, """
         name: test

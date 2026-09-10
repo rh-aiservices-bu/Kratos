@@ -27,8 +27,9 @@ async def test_metrics_fill_passes() -> None:
 async def test_metrics_fill_maas_counts_match_sent() -> None:
     """MaaS-reported request/token deltas must match what the harness actually sent.
 
-    Requires MAAS_METRICS_URL/MAAS_METRICS_QUERIES to be configured on the cluster —
-    see ADR-014. If they aren't set, the background poller never populates
+    Requires MAAS_METRICS_URL to be configured on the cluster — see ADR-014/ADR-015
+    (the scenario's own metrics_queries: block supplies the PromQL). If unset, the
+    background poller never populates
     shared_state["metrics"] and both assertions stay PENDING (not FAILING), so this
     only asserts once the metrics pipeline is actually wired up.
     """

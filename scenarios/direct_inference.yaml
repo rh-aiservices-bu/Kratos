@@ -16,6 +16,12 @@ tasks:
       count: "${config.request_count}"
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
+    # promql pass-through form (ADR-015) — see single_key_load.yaml for why. Note
+    # this scenario bypasses the MaaS gateway entirely (sends straight to
+    # target_url), so there's no real MaaS-side metric to cross-check here — this
+    # remains a pure harness-side threshold, just routed through Prometheus.
     assertions:
-      error_rate_pct: "< 5"
+      error_rate_pct:
+        promql: "${harness.inference_results.error_rate_pct}"
+        expect: "< 5"
 cleanup: automatic

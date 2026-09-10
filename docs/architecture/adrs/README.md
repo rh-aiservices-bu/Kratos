@@ -27,3 +27,5 @@ Each ADR follows the [Michael Nygard format](https://cognitect.com/blog/2011/11/
 | [ADR-011](ADR-011-react-patternfly-frontend.md) | React + TypeScript + PatternFly Frontend | Accepted |
 | [ADR-012](ADR-012-send-requests-overridable-url-token.md) | send_requests with Overridable URL and Token (Enabling Direct Inference) | Accepted |
 | [ADR-013](ADR-013-realtime-assertion-evaluation.md) | Real-time Assertion Evaluation During Run Execution | Accepted |
+| [ADR-014](ADR-014-maas-metrics-cross-validation.md) | MaaS Metrics Cross-Validation via Prometheus Baseline Delta | Accepted |
+| [ADR-015](ADR-015-promql-native-assertions.md) | PromQL-Native Assertions | Accepted |

@@ -12,7 +12,11 @@ def _q(query: str) -> str:
     return str(httpx.URL(_BASE, params={"query": query}))
 
 
-def _make_ctx(config: dict | None = None, shared_state: dict | None = None) -> TaskContext:
+def _make_ctx(
+    config: dict | None = None,
+    shared_state: dict | None = None,
+    metrics_queries: dict | None = None,
+) -> TaskContext:
     async def _emit() -> None:
         pass
 
@@ -25,6 +29,7 @@ def _make_ctx(config: dict | None = None, shared_state: dict | None = None) -> T
         config=config or {},
         assertions={},
         emit_assertion_state=_emit,
+        metrics_queries=metrics_queries or {},
     )
 
 
@@ -66,10 +71,8 @@ async def test_check_maas_metrics_fetches_via_configured_queries(httpx_mock: HTT
 
     task = CheckMaasMetricsTask("check_maas_metrics", {})
     ctx = _make_ctx(
-        config={
-            "MAAS_METRICS_URL": _BASE,
-            "MAAS_METRICS_QUERIES": '{"total_requests": "sum(requests)", "total_tokens": "sum(tokens)"}',
-        }
+        config={"MAAS_METRICS_URL": _BASE},
+        metrics_queries={"total_requests": "sum(requests)", "total_tokens": "sum(tokens)"},
     )
     result = await task.run(ctx)
 
@@ -85,9 +88,9 @@ async def test_check_maas_metrics_task_params_override_config(httpx_mock: HTTPXM
 
     task = CheckMaasMetricsTask(
         "check_maas_metrics",
-        {"metrics_url": _BASE, "queries": '{"total_requests": "sum(override)"}'},
+        {"metrics_url": _BASE, "queries": {"total_requests": "sum(override)"}},
     )
-    ctx = _make_ctx(config={"MAAS_METRICS_URL": "http://ignored.test", "MAAS_METRICS_QUERIES": "{}"})
+    ctx = _make_ctx(config={"MAAS_METRICS_URL": "http://ignored.test"}, metrics_queries={})
     result = await task.run(ctx)
 
     assert result.status == "PASS"
@@ -98,7 +101,7 @@ async def test_check_maas_metrics_handles_fetch_error(capsys: pytest.CaptureFixt
     """Unreachable metrics endpoint: query omitted, task still passes."""
     task = CheckMaasMetricsTask(
         "check_maas_metrics",
-        {"metrics_url": "http://unreachable.test/api/v1/query", "queries": '{"total_requests": "sum(foo)"}'},
+        {"metrics_url": "http://unreachable.test/api/v1/query", "queries": {"total_requests": "sum(foo)"}},
     )
     ctx = _make_ctx()
     result = await task.run(ctx)
