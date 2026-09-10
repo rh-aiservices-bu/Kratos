@@ -144,7 +144,9 @@ class SendRequestsTask(Task):
         url = self.params.get("url") or ctx.shared_state.get("url")
         token = self.params.get("token") or ctx.shared_state.get("token") or ctx.sa_token
         default_model = str(
-            self.params.get("model") or ctx.config.get("DEFAULT_MODEL", "granite-3-8b-instruct")
+            self.params.get("model")
+            or ctx.config.get("target_model")
+            or ctx.config.get("DEFAULT_MODEL", "granite-3-8b-instruct")
         )
         if url:
             return str(url), default_model, str(token)

@@ -3,6 +3,7 @@ description: "Direct inference — bypasses MaaS gateway, tests the underlying m
 config:
   target_url: ""
   target_token: ""
+  target_model: ""
   request_count: 50
   concurrency: 5
   prompt: "Hello, world!"
@@ -11,6 +12,7 @@ tasks:
     params:
       url: "${config.target_url}"
       token: "${config.target_token}"
+      model: "${config.target_model}"
       count: "${config.request_count}"
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
