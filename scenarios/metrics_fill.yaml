@@ -5,6 +5,12 @@ config:
   concurrency: 10
   prompt: "Hello, world!"
   metrics_tolerance_pct: 5
+  # How long the runner will keep re-polling MaaS metrics after the run finishes,
+  # waiting for a fresh Prometheus scrape to actually reflect the sent traffic,
+  # before evaluating maas_requests_match/maas_tokens_match. Default (see
+  # harness/runner.py) assumes a ~30s scrape interval; raise this if your cluster's
+  # is longer or scrapes are less reliable under load.
+  metrics_max_wait_s: 65
 tasks:
   - name: provision_api_key
     params:
@@ -21,8 +27,10 @@ tasks:
         compare: metrics.total_requests_delta
         to: inference_results.total_requests
         tolerance_pct: "${config.metrics_tolerance_pct}"
+        max_wait_s: "${config.metrics_max_wait_s}"
       maas_tokens_match:
         compare: metrics.total_tokens_delta
         to: inference_results.total_tokens_sent
         tolerance_pct: "${config.metrics_tolerance_pct}"
+        max_wait_s: "${config.metrics_max_wait_s}"
 cleanup: automatic

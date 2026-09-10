@@ -259,7 +259,23 @@ MaaS/RHOAI metrics are read from Prometheus/Thanos Querier's instant-query API (
 
 `ScenarioRunner.run()` takes one metrics snapshot immediately before the task loop starts and stores it as `shared_state["metrics_baseline"]`. It then starts an asyncio background task (`_metrics_bg`) that polls every 5 s, writes the raw current values into `shared_state["metrics"]`, computes `{name}_delta = current - baseline` for each metric present in both, and calls `emit()` to trigger an assertion re-evaluation. The delta — not the raw value — is what should be compared against harness-known sent counts, since the underlying Prometheus counter may be cumulative/scoped beyond a single run rather than zeroed per run.
 
-After the main task loop and cleanup complete, the background task is cancelled and the runner fetches a **definitive final state with bounded retry**: it re-fetches every 5 s (up to a ~40 s cap) until at least one metric has moved past its baseline value, then evaluates. A single immediate fetch isn't enough — a scenario that finishes faster than Prometheus's scrape interval (commonly ~30 s) would otherwise read back an unchanged baseline (delta=0) even though the traffic really happened, which a tolerance-band comparison can't distinguish from "genuinely nothing changed" (confirmed by hitting this exact false-FAIL on a live run before adding the retry). A run that already took longer than one scrape interval typically exits the retry loop immediately, so this adds no wall-clock cost for slower scenarios.
+**Settling metrics-dependent assertions** (`_settle_and_evaluate()` in `harness/runner.py`): a metrics-dependent assertion (any match-form assertion referencing `metrics.*`) can't be evaluated correctly right when its task finishes — Prometheus hasn't necessarily scraped the traffic yet (confirmed scrape interval on the cluster this repo targets: 30 s cluster-wide). So both the per-task assertion check (right after a task with `assertions:` completes) and the scenario's top-level assertion check (after cleanup) use the same mechanism: poll MaaS metrics every 5 s, re-evaluating the relevant assertions after each poll, stopping as soon as **all of them are PASSING** — or giving up at a `max_wait_s` cap (default 65 s) and reporting whatever the last evaluation showed. This directly checks the thing that actually matters (did the assertion pass) rather than inferring readiness from some proxy signal.
+
+Three earlier designs tried to infer readiness indirectly instead, and each broke on a different, increasingly subtle behavior — see ADR-014 for the full account:
+1. Stop on the first metrics value that differs from the run's original baseline — false positive on a longer run (the background poller usually already captured mid-run progress by the time the check ran).
+2. Stop once two consecutive fetches return the same value ("settled") — false positive in the opposite direction (the first retry fetch usually lands within the same stale scrape window the background poller already saw).
+3. Compare each metric's Prometheus sample timestamp to when the check started, using PromQL's `timestamp()` function — worked on a bare metric, but the actually-configured queries are wrapped in `sum(...)`, and aggregation functions reset a series' timestamp to query-evaluation time before `timestamp()` ever sees the original scrape time, so this also read as instantly "fresh."
+4. **A separate, distinct bug found alongside these**: the very first "wait" implementation only applied to the scenario's *top-level* `assertions:` block, evaluated once after cleanup. But `metrics_fill.yaml` (like other scenarios) attaches its MaaS match-assertions to the `send_requests` *task* instead — and the per-task assertion check ran a single immediate evaluation with no retry at all, failing instantly regardless of any wait logic further down. This is why `_settle_and_evaluate()` is now shared by both call sites.
+
+`max_wait_s` is tunable per match-assertion, since different scenarios/clusters may need more or less headroom than the default:
+```yaml
+assertions:
+  maas_requests_match:
+    compare: metrics.total_requests_delta
+    to: inference_results.total_requests
+    tolerance_pct: 5
+    max_wait_s: 65   # optional; all match-form assertions in a scenario share one settle loop, so the max configured value across them wins
+```
 
 The `check_maas_metrics` task class still exists and can be added to a scenario's task list if an explicit final check with a log summary is wanted. Standard scenarios no longer include it.
 

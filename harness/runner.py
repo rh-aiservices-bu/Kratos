@@ -22,6 +22,7 @@ def _read_sa_token(config: dict) -> str:
 from harness.config import load_scenario
 from harness.metrics_client import fetch_metrics, parse_queries
 from harness.result import (
+    AssertionResult,
     RunResult,
     TaskResult,
     compute_run_status,
@@ -31,8 +32,42 @@ from harness.tasks.base import Task, TaskContext
 from harness.tasks.registry import REGISTRY
 
 _EMIT_DEBOUNCE_S = 0.1
-_METRICS_FINAL_MAX_WAIT_S = 40.0
+# Default cap for settling a metrics-dependent assertion (see _settle_and_evaluate).
+# Confirmed on the cluster this repo targets: Prometheus/Thanos scrapeInterval is 30s
+# cluster-wide (no per-target override on the Limitador PodMonitor), so a request
+# landing right after a scrape must wait nearly the full 30s for the next one — 65s
+# leaves real headroom above that for scrape jitter/an occasional delayed scrape under
+# load. Override per-scenario via an assertion's `max_wait_s` (see _configured_max_wait_s
+# below) if a cluster's interval differs or needs more headroom.
+#
+# Earlier designs tried to detect "has a fresh scrape landed" indirectly — comparing
+# fetched values against a baseline, against the previous poll, against the Prometheus
+# response's own timestamp — and each broke on a different, increasingly subtle
+# Prometheus API behavior (see ADR-014 for the full history). This settles that by
+# checking the only thing that actually matters directly: does the assertion pass yet.
+_METRICS_FINAL_MAX_WAIT_S = 65.0
 _METRICS_FINAL_POLL_INTERVAL_S = 5.0
+
+
+def _configured_max_wait_s(assertions: dict, task_defs: list[dict]) -> float:
+    """Largest `max_wait_s` set on any match-form assertion (top-level or per-task).
+
+    All match-form assertions share the one background metrics fetch/retry loop, so
+    a single scenario-wide value is used — take the max across whatever's configured,
+    falling back to the module default when nothing overrides it.
+    """
+    values = [
+        float(spec["max_wait_s"])
+        for spec in assertions.values()
+        if isinstance(spec, dict) and "max_wait_s" in spec
+    ]
+    for task_def in task_defs:
+        values.extend(
+            float(spec["max_wait_s"])
+            for spec in (task_def.get("assertions") or {}).values()
+            if isinstance(spec, dict) and "max_wait_s" in spec
+        )
+    return max(values) if values else _METRICS_FINAL_MAX_WAIT_S
 
 
 class ScenarioRunner:
@@ -155,6 +190,26 @@ class ScenarioRunner:
             }
             shared_state["metrics"] = {**raw, **deltas}
 
+        async def _settle_and_evaluate(
+            assertions_to_check: dict[str, str | dict], max_wait_s: float
+        ) -> list[AssertionResult]:
+            """Evaluate assertions_to_check, polling MaaS metrics up to max_wait_s and
+            re-evaluating after each poll, stopping as soon as every one of them is
+            PASSING (or the cap is hit, whichever comes first). Used both right after
+            a task with metrics-dependent assertions completes, and for the scenario's
+            top-level assertions after cleanup.
+            """
+            if not metrics_enabled or not assertions_to_check:
+                return evaluate_all_assertions(assertions_to_check, shared_state)
+            elapsed = 0.0
+            while True:
+                await _fetch_metrics_once()
+                results = evaluate_all_assertions(assertions_to_check, shared_state)
+                if all(r.status == "PASSING" for r in results) or elapsed >= max_wait_s:
+                    return results
+                await asyncio.sleep(_METRICS_FINAL_POLL_INTERVAL_S)
+                elapsed += _METRICS_FINAL_POLL_INTERVAL_S
+
         async def _metrics_bg() -> None:
             while True:
                 await _fetch_metrics_once()
@@ -181,6 +236,7 @@ class ScenarioRunner:
         task_results: list[TaskResult] = []
         current_task_idx = -1
         run_failed = False
+        max_wait_s = _configured_max_wait_s(assertions, task_defs)
 
         _write_progress(-1, [])
         metrics_bg = None
@@ -202,8 +258,9 @@ class ScenarioRunner:
                 if tp:
                     task_completed_progress[task.name] = tp
                 if current_task_assertions:
-                    await _fetch_metrics_once()
-                    task_assertion_results = evaluate_all_assertions(current_task_assertions, shared_state)
+                    task_assertion_results = await _settle_and_evaluate(
+                        current_task_assertions, max_wait_s
+                    )
                     result.assertions = task_assertion_results
                     if result.status == "PASS" and any(a.status == "FAILING" for a in task_assertion_results):
                         result.status = "FAIL"
@@ -242,31 +299,14 @@ class ScenarioRunner:
                     flush=True,
                 )
 
-        # Stop background metrics poller, then fetch a definitive final state. A single
-        # fetch immediately after cleanup can land inside the same Prometheus scrape
-        # interval the run started in — for a scenario that finishes faster than the
-        # scrape interval (commonly ~30s), that reads back as an unchanged baseline
-        # (delta=0) even though the traffic really happened, which a tolerance-band
-        # comparison can't distinguish from "genuinely nothing changed". So retry a
-        # few times, stopping as soon as any metric has moved past its baseline
-        # (evidence a fresh scrape has landed) or a bounded cap is hit.
+        # Stop the background metrics poller, then let the scenario's top-level
+        # assertions settle the same way per-task ones do (_settle_and_evaluate).
         if metrics_bg:
             metrics_bg.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await metrics_bg
-            baseline = shared_state.get("metrics_baseline") or {}
-            elapsed = 0.0
-            while elapsed < _METRICS_FINAL_MAX_WAIT_S:
-                await _fetch_metrics_once()
-                current = {
-                    k: v for k, v in shared_state.get("metrics", {}).items() if not k.endswith("_delta")
-                }
-                if any(current.get(k) != baseline.get(k) for k in current):
-                    break
-                await asyncio.sleep(_METRICS_FINAL_POLL_INTERVAL_S)
-                elapsed += _METRICS_FINAL_POLL_INTERVAL_S
 
-        assertion_results = evaluate_all_assertions(assertions, shared_state)
+        assertion_results = await _settle_and_evaluate(assertions, max_wait_s)
         # Final (non-debounced) writes so files reflect the definitive end state.
         # current_task_assertions cleared — all task assertions are now frozen in task_results.
         current_task_assertions = {}

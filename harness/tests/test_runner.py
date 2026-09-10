@@ -1,5 +1,6 @@
 import asyncio
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -182,10 +183,15 @@ def test_metrics_baseline_delta_feeds_match_assertion(
         calls.append(None)
         # First call (before the task loop starts) is the baseline; every call
         # after that represents "current" and must stay consistent regardless
-        # of how many background polls happen to interleave.
+        # of how many background/settle polls happen to interleave.
         return {"total_requests": 10.0} if len(calls) == 1 else {"total_requests": 55.0}
 
     monkeypatch.setattr(runner_module, "fetch_metrics", fake_fetch_metrics)
+    # Keep the settle loop fast regardless — the fake above already converges on its
+    # first post-baseline call, so a tiny cap/interval doesn't change the outcome,
+    # just guards against the loop ever needing a second iteration for some other reason.
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_MAX_WAIT_S", 0.05)
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_POLL_INTERVAL_S", 0.01)
 
     class _ExpectSentCount(Task):
         async def run(self, ctx: TaskContext) -> TaskResult:
@@ -221,6 +227,217 @@ def test_metrics_baseline_delta_feeds_match_assertion(
         assert assertion.expected_value == 45.0
     finally:
         REGISTRY.pop("_expect_sent_count", None)
+
+
+def test_configured_max_wait_s_unit() -> None:
+    from harness.runner import _METRICS_FINAL_MAX_WAIT_S, _configured_max_wait_s
+
+    assert _configured_max_wait_s({}, []) == _METRICS_FINAL_MAX_WAIT_S
+
+    assert (
+        _configured_max_wait_s(
+            {"maas_requests_match": {"compare": "a", "to": "b", "max_wait_s": 90}}, []
+        )
+        == 90.0
+    )
+
+    # String values (as produced by ${config.X} interpolation) are coerced to float.
+    assert (
+        _configured_max_wait_s(
+            {}, [{"assertions": {"maas_tokens_match": {"max_wait_s": "120"}}}]
+        )
+        == 120.0
+    )
+
+    # Max across top-level and per-task, and across multiple assertions, wins.
+    assert (
+        _configured_max_wait_s(
+            {"a": {"max_wait_s": 10}},
+            [{"assertions": {"b": {"max_wait_s": 30}, "c": {"max_wait_s": 20}}}],
+        )
+        == 30.0
+    )
+
+    # Simple string-form assertions (no dict) and dicts without max_wait_s are ignored.
+    assert _configured_max_wait_s({"error_rate_pct": "< 5"}, [{"assertions": {"x": {}}}]) == (
+        _METRICS_FINAL_MAX_WAIT_S
+    )
+
+
+def test_scenario_max_wait_s_overrides_default_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scenario-configured max_wait_s is honored instead of the module default."""
+    from harness import runner as runner_module
+
+    async def fake_fetch_metrics(base_url: str, queries: dict, token: str) -> dict:
+        # Always empty: the assertion can never resolve (stays PENDING forever), so
+        # the settle loop can only ever stop by hitting its max_wait_s cap.
+        return {}
+
+    monkeypatch.setattr(runner_module, "fetch_metrics", fake_fetch_metrics)
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_POLL_INTERVAL_S", 0.01)
+    # Deliberately do NOT shrink the module default here — if the scenario's
+    # max_wait_s isn't honored, this test would fall back to it and time out slow.
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_MAX_WAIT_S", 5.0)
+
+    path = _write(tmp_path, """
+        name: test_max_wait_override
+        config:
+          MAAS_METRICS_URL: "http://thanos.test/api/v1/query"
+          MAAS_METRICS_QUERIES: '{"total_requests": "sum(foo)"}'
+        tasks:
+          - name: stub_pass
+            params: {}
+        assertions:
+          maas_requests_match:
+            compare: metrics.total_requests_delta
+            to: inference_results.total_requests
+            tolerance_pct: 5
+            max_wait_s: 0.05
+    """)
+    t0 = time.monotonic()
+    result = asyncio.run(ScenarioRunner(path, "max-wait-001").run())
+    elapsed = time.monotonic() - t0
+
+    assert result.status == "PASS"  # PENDING assertion doesn't fail the run
+    assertion = {a.name: a for a in result.assertions}["maas_requests_match"]
+    assert assertion.status == "PENDING"
+    # Bounded by the scenario's own max_wait_s (0.05s), not the 5s module default.
+    assert elapsed < 2.0, f"took {elapsed}s — scenario max_wait_s was not honored"
+
+
+def test_settle_and_evaluate_polls_until_assertion_actually_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The settle loop keeps polling and re-evaluating until the assertion itself
+    passes — not until some proxy signal (a changed value, a repeated value, a
+    Prometheus sample timestamp) suggests it might have. Earlier designs all tried to
+    infer "is the data ready" indirectly and each broke on a different subtlety (see
+    ADR-014); checking the actual assertion outcome directly avoids that whole class
+    of bug, and matches the requested design: wait up to max_wait_s, but stop as soon
+    as it passes.
+    """
+    from harness import runner as runner_module
+
+    calls: list[None] = []
+
+    async def fake_fetch_metrics(base_url: str, queries: dict, token: str) -> dict:
+        calls.append(None)
+        n = len(calls)
+        if n == 1:
+            return {"total_requests": 10.0}  # baseline
+        if n <= 3:
+            return {"total_requests": 30.0}  # delta=20, outside 5% tolerance of 45 -> FAILING
+        return {"total_requests": 55.0}  # delta=45, matches exactly -> PASSING
+
+    monkeypatch.setattr(runner_module, "fetch_metrics", fake_fetch_metrics)
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_MAX_WAIT_S", 5.0)
+
+    class _ExpectSentCount(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            ctx.shared_state["inference_results"] = {"total_requests": 45.0}
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            pass
+
+    REGISTRY["_expect_sent_count_2"] = _ExpectSentCount
+
+    try:
+        path = _write(tmp_path, """
+            name: test_settle_until_pass
+            config:
+              MAAS_METRICS_URL: "http://thanos.test/api/v1/query"
+              MAAS_METRICS_QUERIES: '{"total_requests": "sum(foo)"}'
+            tasks:
+              - name: _expect_sent_count_2
+                params: {}
+            assertions:
+              maas_requests_match:
+                compare: metrics.total_requests_delta
+                to: inference_results.total_requests
+                tolerance_pct: 5
+        """)
+        t0 = time.monotonic()
+        result = asyncio.run(ScenarioRunner(path, "settle-001").run())
+        elapsed = time.monotonic() - t0
+
+        assert len(calls) >= 4, "must keep polling past a non-passing result"
+        assertion = {a.name: a for a in result.assertions}["maas_requests_match"]
+        assert assertion.status == "PASSING"
+        assert assertion.current_value == 45.0  # 55 - 10, not the earlier 20 (30-10)
+        # Stops as soon as it passes — well under the 5s cap, despite needing several
+        # non-passing polls first.
+        assert elapsed < 2.0, f"took {elapsed}s — did not stop early once passing"
+    finally:
+        REGISTRY.pop("_expect_sent_count_2", None)
+
+
+def test_per_task_metrics_assertion_settles_instead_of_failing_instantly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test for the actual reported bug: a match-assertion attached to a
+    *task* (not the scenario's top-level assertions:) must also get the settle
+    treatment. It previously didn't — the per-task assertion check did a single
+    immediate evaluation with no retry at all, so a metrics-dependent assertion on a
+    task failed instantly, before the metrics-settle logic (which only ran after
+    cleanup, on top-level assertions) ever got a chance to run.
+    """
+    from harness import runner as runner_module
+
+    calls: list[None] = []
+
+    async def fake_fetch_metrics(base_url: str, queries: dict, token: str) -> dict:
+        calls.append(None)
+        n = len(calls)
+        if n == 1:
+            return {"total_requests": 10.0}  # baseline
+        if n <= 2:
+            return {"total_requests": 12.0}  # delta=2, well outside tolerance of 20 -> FAILING
+        return {"total_requests": 30.0}  # delta=20, matches -> PASSING
+
+    monkeypatch.setattr(runner_module, "fetch_metrics", fake_fetch_metrics)
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_MAX_WAIT_S", 5.0)
+
+    class _SendLikeTask(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            ctx.shared_state["inference_results"] = {"total_requests": 20.0}
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            pass
+
+    REGISTRY["_send_like_task"] = _SendLikeTask
+
+    try:
+        path = _write(tmp_path, """
+            name: test_per_task_settle
+            config:
+              MAAS_METRICS_URL: "http://thanos.test/api/v1/query"
+              MAAS_METRICS_QUERIES: '{"total_requests": "sum(foo)"}'
+            tasks:
+              - name: _send_like_task
+                params: {}
+                assertions:
+                  maas_requests_match:
+                    compare: metrics.total_requests_delta
+                    to: inference_results.total_requests
+                    tolerance_pct: 5
+            assertions: {}
+        """)
+        result = asyncio.run(ScenarioRunner(path, "per-task-settle-001").run())
+
+        assert len(calls) >= 3, "per-task assertion check must poll, not just check once"
+        assert result.status == "PASS"
+        assert result.tasks[0].status == "PASS"
+        assertion = {a.name: a for a in result.tasks[0].assertions}["maas_requests_match"]
+        assert assertion.status == "PASSING"
+        assert assertion.current_value == 20.0  # 30 - 10, the settled value
+    finally:
+        REGISTRY.pop("_send_like_task", None)
 
 
 def test_metrics_polling_disabled_without_config(tmp_path: Path) -> None:

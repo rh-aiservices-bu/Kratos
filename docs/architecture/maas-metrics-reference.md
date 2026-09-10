@@ -13,6 +13,8 @@ Authorization: Bearer <token>
 
 Requires the querying identity to be bound to the `cluster-monitoring-view` ClusterRole (`deploy/rbac-monitoring.yaml` binds the Kratos SA to it). Verified this route/RBAC pattern exists and works on the live cluster using a real bearer token.
 
+**Scrape freshness**: confirmed `scrapeInterval: 30s` cluster-wide (`oc get prometheus -n openshift-user-workload-monitoring -o jsonpath='{.items[0].spec.scrapeInterval}'`), no per-target override on the Limitador PodMonitor. This bounds how fresh any query result can be — a request landing right after a scrape must wait up to ~30s for the next one, which is why Kratos's final metrics check retries with a settle window (`max_wait_s`, see ADR-014) rather than fetching once.
+
 One-off debugging technique also used during research (not what Kratos uses at runtime): the Kubernetes API server can proxy directly to a pod's or service's own metrics port without Thanos or a port-forward, which is useful for a component whose metrics haven't been scraped/labeled yet:
 ```
 oc get --raw /api/v1/namespaces/<ns>/pods/<pod-name>:<port>/proxy/metrics

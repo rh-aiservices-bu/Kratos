@@ -11,3 +11,11 @@ data:
   KRATOS_IMAGE: "quay.io/willsparker/kratos:latest"
   DB_PATH: "/data/kratos.db"
   SCENARIOS_DIR: "/app/scenarios"
+  # Thanos Querier instant-query endpoint and PromQL queries backing MaaS metrics
+  # cross-validation (see docs/architecture/adrs/ADR-014 and
+  # docs/architecture/maas-metrics-reference.md). authorized_calls/authorized_hits
+  # are Kuadrant/Limitador gateway counters scoped by limitador_namespace (the
+  # target model's HTTPRoute name) — verified live against this cluster. Update
+  # limitador_namespace here if the target model (DEFAULT_MODEL) ever changes.
+  MAAS_METRICS_URL: "https://thanos-querier-openshift-monitoring.apps.cluster-rkmhx.rkmhx.sandbox1230.opentlc.com/api/v1/query"
+  MAAS_METRICS_QUERIES: '{"total_requests": "sum(authorized_calls{limitador_namespace=\"llm/facebook-opt-125m-simulated-kserve-route\"})", "total_tokens": "sum(authorized_hits{limitador_namespace=\"llm/facebook-opt-125m-simulated-kserve-route\"})"}'

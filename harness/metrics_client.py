@@ -4,9 +4,8 @@ Used by both the background poller (harness/runner.py) and the optional explicit
 check_maas_metrics task (harness/tasks/metrics.py) so there's a single place that knows
 how to talk to Thanos Querier / Prometheus and parse its response shape.
 
-The base URL (MAAS_METRICS_URL) and the named PromQL queries (MAAS_METRICS_QUERIES) are
-both TBD until the real RHOAI metrics source is confirmed on a live cluster — see
-docs/architecture/adrs/ADR-014-maas-metrics-cross-validation.md.
+See docs/architecture/adrs/ADR-014-maas-metrics-cross-validation.md for the confirmed
+real MAAS_METRICS_URL/MAAS_METRICS_QUERIES values.
 """
 
 import json

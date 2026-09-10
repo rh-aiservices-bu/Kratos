@@ -106,6 +106,7 @@ data:
       concurrency: 10
       prompt: "Hello, world!"
       metrics_tolerance_pct: 5
+      metrics_max_wait_s: 65
     tasks:
       - name: provision_api_key
         params:
@@ -122,8 +123,10 @@ data:
             compare: metrics.total_requests_delta
             to: inference_results.total_requests
             tolerance_pct: "${config.metrics_tolerance_pct}"
+            max_wait_s: "${config.metrics_max_wait_s}"
           maas_tokens_match:
             compare: metrics.total_tokens_delta
             to: inference_results.total_tokens_sent
             tolerance_pct: "${config.metrics_tolerance_pct}"
+            max_wait_s: "${config.metrics_max_wait_s}"
     cleanup: automatic

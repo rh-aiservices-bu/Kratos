@@ -10,7 +10,7 @@ _SCENARIO_DIR = pathlib.Path("scenarios")
 _SCENARIO_PATHS = sorted(
     p for p in _SCENARIO_DIR.glob("*.yaml") if not p.stem.startswith("stub")
 )
-_REQUIRED_FIELDS = {"name", "description", "tasks", "assertions", "cleanup"}
+_REQUIRED_FIELDS = {"name", "description", "tasks", "cleanup"}
 
 
 def test_exactly_five_production_scenarios() -> None:
