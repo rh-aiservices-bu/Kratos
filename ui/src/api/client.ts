@@ -13,6 +13,7 @@ export interface Run {
 }
 
 export interface AssertionState {
+  task: string | null;
   name: string;
   status: 'PENDING' | 'PASSING' | 'FAILING';
   value: number | null;
@@ -61,6 +62,7 @@ export interface TaskProgressEntry {
   name: string;
   status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAIL';
   progress?: { current: number; total: number };
+  assertions_status?: 'PASSING' | 'FAILING' | 'PENDING';
 }
 
 export async function getProgress(runId: string): Promise<TaskProgressEntry[]> {

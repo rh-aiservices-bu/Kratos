@@ -263,6 +263,95 @@ def test_stub_scenario_passes() -> None:
     assert all(t.status == "PASS" for t in result.tasks)
 
 
+def test_per_task_assertion_fail_aborts_run(tmp_path: Path) -> None:
+    """A failing per-task assertion overrides task to FAIL and aborts subsequent tasks."""
+    ran: list[str] = []
+
+    class _FirstTask(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            ran.append("first")
+            ctx.shared_state.setdefault("inference_results", {})["error_rate_pct"] = 99.0
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            pass
+
+    class _SecondTask(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            ran.append("second")
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            pass
+
+    REGISTRY["_per_task_first"] = _FirstTask
+    REGISTRY["_per_task_second"] = _SecondTask
+
+    try:
+        path = _write(tmp_path, """
+            name: test_per_task_fail
+            config: {}
+            tasks:
+              - name: _per_task_first
+                params: {}
+                assertions:
+                  error_rate_pct: "< 5"
+              - name: _per_task_second
+                params: {}
+            assertions: {}
+        """)
+        result = asyncio.run(ScenarioRunner(path, "per-task-001").run())
+        assert result.status == "FAIL"
+        assert ran == ["first"], "second task must not run after first task's assertions fail"
+        assert result.tasks[0].status == "FAIL"
+        assert result.tasks[0].error == "assertions failed at task completion"
+        assert len(result.tasks[0].assertions) == 1
+        assert result.tasks[0].assertions[0].name == "error_rate_pct"
+        assert result.tasks[0].assertions[0].status == "FAILING"
+    finally:
+        REGISTRY.pop("_per_task_first", None)
+        REGISTRY.pop("_per_task_second", None)
+
+
+def test_per_task_assertion_pass_continues_run(tmp_path: Path) -> None:
+    """Passing per-task assertions don't abort the run; assertions stored on TaskResult."""
+    ran: list[str] = []
+
+    class _GoodTask(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            ran.append(self.name)
+            ctx.shared_state.setdefault("inference_results", {})["error_rate_pct"] = 1.0
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            pass
+
+    REGISTRY["_good_task_a"] = _GoodTask
+    REGISTRY["_good_task_b"] = _GoodTask
+
+    try:
+        path = _write(tmp_path, """
+            name: test_per_task_pass
+            config: {}
+            tasks:
+              - name: _good_task_a
+                params: {}
+                assertions:
+                  error_rate_pct: "< 5"
+              - name: _good_task_b
+                params: {}
+            assertions: {}
+        """)
+        result = asyncio.run(ScenarioRunner(path, "per-task-pass-001").run())
+        assert result.status == "PASS"
+        assert ran == ["_good_task_a", "_good_task_b"]
+        assert result.tasks[0].assertions[0].status == "PASSING"
+        assert result.tasks[1].assertions == []
+    finally:
+        REGISTRY.pop("_good_task_a", None)
+        REGISTRY.pop("_good_task_b", None)
+
+
 def test_stub_failing_scenario_produces_fail_with_cleanup(
     capsys: pytest.CaptureFixture,
 ) -> None:

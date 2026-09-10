@@ -20,7 +20,7 @@ tasks:
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
       key_pool: true
-assertions:
-  throughput_rps: "<= ${config.rate_limit_rps}"
-  error_rate_pct: "< 30"
+    assertions:
+      throughput_rps: "<= ${config.rate_limit_rps}"
+      error_rate_pct: "< 30"
 cleanup: automatic

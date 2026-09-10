@@ -20,6 +20,7 @@ class TaskResult:
     status: Literal["PASS", "FAIL"]
     duration_ms: float
     error: str | None = None
+    assertions: list["AssertionResult"] = field(default_factory=list)
 
 
 @dataclass

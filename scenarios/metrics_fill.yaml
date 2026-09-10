@@ -15,14 +15,14 @@ tasks:
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
       key_pool: true
-assertions:
-  error_rate_pct: "< 5"
-  maas_requests_match:
-    compare: metrics.total_requests_delta
-    to: inference_results.total_requests
-    tolerance_pct: "${config.metrics_tolerance_pct}"
-  maas_tokens_match:
-    compare: metrics.total_tokens_delta
-    to: inference_results.total_tokens_sent
-    tolerance_pct: "${config.metrics_tolerance_pct}"
+    assertions:
+      error_rate_pct: "< 5"
+      maas_requests_match:
+        compare: metrics.total_requests_delta
+        to: inference_results.total_requests
+        tolerance_pct: "${config.metrics_tolerance_pct}"
+      maas_tokens_match:
+        compare: metrics.total_tokens_delta
+        to: inference_results.total_tokens_sent
+        tolerance_pct: "${config.metrics_tolerance_pct}"
 cleanup: automatic

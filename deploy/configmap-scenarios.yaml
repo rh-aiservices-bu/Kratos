@@ -21,9 +21,9 @@ data:
           concurrency: "${config.concurrency}"
           prompt: "${config.prompt}"
           key_pool: true
-    assertions:
-      error_rate_pct: "< 5"
-      p99_latency_ms: "< 10000"
+        assertions:
+          error_rate_pct: "< 5"
+          p99_latency_ms: "< 10000"
     cleanup: automatic
 
   multi_key_load.yaml: |
@@ -45,8 +45,8 @@ data:
           concurrency: "${config.concurrency}"
           prompt: "${config.prompt}"
           key_pool: true
-    assertions:
-      error_rate_pct: "< 5"
+        assertions:
+          error_rate_pct: "< 5"
     cleanup: automatic
 
   direct_inference.yaml: |
@@ -66,8 +66,8 @@ data:
           count: "${config.request_count}"
           concurrency: "${config.concurrency}"
           prompt: "${config.prompt}"
-    assertions:
-      error_rate_pct: "< 5"
+        assertions:
+          error_rate_pct: "< 5"
     cleanup: automatic
 
   rate_limit_validation.yaml: |
@@ -93,9 +93,9 @@ data:
           concurrency: "${config.concurrency}"
           prompt: "${config.prompt}"
           key_pool: true
-    assertions:
-      throughput_rps: "<= ${config.rate_limit_rps}"
-      error_rate_pct: "< 30"
+        assertions:
+          throughput_rps: "<= ${config.rate_limit_rps}"
+          error_rate_pct: "< 30"
     cleanup: automatic
 
   metrics_fill.yaml: |
@@ -116,14 +116,14 @@ data:
           concurrency: "${config.concurrency}"
           prompt: "${config.prompt}"
           key_pool: true
-    assertions:
-      error_rate_pct: "< 5"
-      maas_requests_match:
-        compare: metrics.total_requests_delta
-        to: inference_results.total_requests
-        tolerance_pct: "${config.metrics_tolerance_pct}"
-      maas_tokens_match:
-        compare: metrics.total_tokens_delta
-        to: inference_results.total_tokens_sent
-        tolerance_pct: "${config.metrics_tolerance_pct}"
+        assertions:
+          error_rate_pct: "< 5"
+          maas_requests_match:
+            compare: metrics.total_requests_delta
+            to: inference_results.total_requests
+            tolerance_pct: "${config.metrics_tolerance_pct}"
+          maas_tokens_match:
+            compare: metrics.total_tokens_delta
+            to: inference_results.total_tokens_sent
+            tolerance_pct: "${config.metrics_tolerance_pct}"
     cleanup: automatic

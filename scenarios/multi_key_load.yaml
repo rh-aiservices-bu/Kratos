@@ -16,6 +16,6 @@ tasks:
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
       key_pool: true
-assertions:
-  error_rate_pct: "< 5"
+    assertions:
+      error_rate_pct: "< 5"
 cleanup: automatic

@@ -3,7 +3,7 @@ import { Button, Grid, GridItem, Page, PageSection, Spinner } from '@patternfly/
 import { AssertionPanel } from './AssertionPanel';
 import { LogStream } from './LogStream';
 import { TaskProgress } from './TaskProgress';
-import { getAssertions, getRun, type AssertionState, type Run } from '../api/client';
+import { getAssertions, getProgress, getRun, type AssertionState, type Run, type TaskProgressEntry } from '../api/client';
 
 function formatScenarioName(name: string): string {
   return name.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
@@ -39,6 +39,7 @@ interface Props {
 export function RunDetail({ runId, onBack }: Props) {
   const [run, setRun] = useState<Run | null>(null);
   const [assertions, setAssertions] = useState<AssertionState[]>([]);
+  const [taskProgress, setTaskProgress] = useState<TaskProgressEntry[]>([]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -63,6 +64,14 @@ export function RunDetail({ runId, onBack }: Props) {
     getAssertions(runId).then(setAssertions).catch(() => {});
     const interval = setInterval(() => {
       getAssertions(runId).then(setAssertions).catch(() => {});
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [runId]);
+
+  useEffect(() => {
+    getProgress(runId).then(setTaskProgress).catch(() => {});
+    const interval = setInterval(() => {
+      getProgress(runId).then(setTaskProgress).catch(() => {});
     }, 2000);
     return () => clearInterval(interval);
   }, [runId]);
@@ -100,7 +109,7 @@ export function RunDetail({ runId, onBack }: Props) {
           )}
         </div>
 
-        <TaskProgress runId={runId} />
+        <TaskProgress tasks={taskProgress} />
 
         <Grid hasGutter>
           <GridItem span={8}>
@@ -108,7 +117,7 @@ export function RunDetail({ runId, onBack }: Props) {
             <LogStream runId={runId} />
           </GridItem>
           <GridItem span={4}>
-            <AssertionPanel assertions={assertions} />
+            <AssertionPanel assertions={assertions} taskProgress={taskProgress} />
           </GridItem>
         </Grid>
       </PageSection>

@@ -24,26 +24,36 @@ oc get --raw /api/v1/namespaces/<ns>/services/http:<service-name>:<port>/proxy/m
 
 Source of the request/token counts that actually matter for validating "what did MaaS's gateway do with the requests Kratos sent." Emitted by Limitador (Kuadrant's rate-limiter, in the request path via Istio/Envoy), scraped via the `kuadrant-limitador-monitor` PodMonitor in `kuadrant-system`.
 
-Confirmed live on the target cluster (real values at time of research):
-| Metric | Type | Meaning | Confirmed live value |
+Per the canonical upstream docs page ([`observability/metrics-and-dashboards`](https://opendatahub-io.github.io/models-as-a-service/latest/observability/metrics-and-dashboards/), raw source read literally, not AI-summarized):
+
+| Metric | Type | Documented labels | Use for |
 |---|---|---|---|
-| `authorized_calls` | counter | Requests that passed rate-limit/auth checks — **total_requests** source | 51119 |
-| `authorized_hits` | counter | Token-weighted hit count (see below) — **total_tokens** source | 2314256 |
-| `limited_calls` | counter | Requests rejected for exceeding a rate limit (429s) | 8771 |
-| `limitador_up` | gauge | Limitador liveness | 1 |
-| `datastore_partitioned` | gauge | Limitador's backing datastore health | 0 |
+| `authorized_hits` | counter | `user`, `subscription`, `model` | Billing/cost — total tokens consumed (input+output) per request; `model` label only exists on this metric |
+| `authorized_calls` | counter | `user`, `subscription` | API usage — number of allowed calls |
+| `limited_calls` | counter | `user`, `subscription` | Rate limiting — requests denied for exceeding quota |
+| `limitador_up` | gauge | none | Limitador liveness (1 = up) |
+| `datastore_partitioned` | gauge | none | Partitioned from backing datastore (0 = healthy) |
+| `datastore_latency` | histogram | none | Latency to backing datastore |
 
-Only label present on any of these on this deployment: `limitador_namespace` (e.g. `llm/facebook-opt-125m-simulated-kserve-route` — the model's HTTPRoute name). No `user`/`subscription`/`model`/`tier` labels, despite those appearing in upstream's sample dashboards (see "Version/config discrepancy" below).
+Confirmed live on the target cluster (real values at time of research):
+```
+authorized_calls{limitador_namespace="llm/facebook-opt-125m-simulated-kserve-route"} = 51119
+authorized_hits{limitador_namespace="llm/facebook-opt-125m-simulated-kserve-route"}  = 2314256
+limited_calls{limitador_namespace="llm/facebook-opt-125m-simulated-kserve-route"}    = 8771
+```
+**Label availability differs from the docs on this deployment**: the actually-deployed Limitador here exports only `limitador_namespace` (e.g. `llm/facebook-opt-125m-simulated-kserve-route`, the model's HTTPRoute name) — no `user`/`subscription`/`model` labels at all, despite those being documented as standard. Confirmed by a direct `/api/v1/series` query, not assumed. (A metric-name suffix mismatch I originally attributed to "version skew" here was actually my own error reading a different, newer Perses dashboard file in the same repo — see "A second, inconsistent dashboard format" below; the canonical docs above match this cluster's real metric *names* exactly, just not the labels.)
 
-**Why `authorized_hits` = tokens, not just another request counter**: this model has a Kuadrant `TokenRateLimitPolicy` (not a plain `RateLimitPolicy`) applied, confirmed `Enforced`. TokenRateLimitPolicy weights each "hit" by the request's actual token usage (parsed from the LLM response body) rather than counting 1 per request — confirmed by the live ~45:1 hits-to-calls ratio, a plausible tokens-per-request figure for this model, not a 1:1 ratio a plain request counter would show.
+(A different, unrelated MaaS sandbox cluster checked briefly during this research, `caiprod.rhoai.rh-aiservices-bu.com`, had `authorized_calls` but no `authorized_hits` series at all — metric/label availability isn't guaranteed consistent across Limitador deployments/versions, so re-verify per cluster with a live `/api/v1/series` query before wiring `MAAS_METRICS_QUERIES`, don't assume either this doc or the upstream docs.)
 
-**Version/config discrepancy worth knowing about**: the upstream repo's shipped Perses dashboard (`deployment/components/observability/observability/dashboards/usage-dashboard.yaml`) assumes `authorized_calls_total` / `authorized_hits_total` / `limited_calls_total` (`_total` suffix) with `user`, `subscription`, `model`, `limitador_namespace` labels. The actually-deployed Limitador on the researched cluster exports the **no-suffix, `limitador_namespace`-only** form. Confirmed by direct series query — use what's actually live on your cluster, don't assume the upstream manifest's naming without checking. (A different, unrelated MaaS sandbox cluster checked briefly during this research, `caiprod.rhoai.rh-aiservices-bu.com`, had `authorized_calls` but no `authorized_hits` series at all — label/metric availability isn't guaranteed consistent across Limitador deployments/versions, so re-verify per cluster before wiring `MAAS_METRICS_QUERIES`.)
-
-Sample real PromQL used by Kratos (see ADR-014):
+Official common-query examples from the docs page (token/request totals, per-model rate, top users, rate-limit ratio, latency percentiles) all use these same bare metric names — e.g. `sum by (user) (authorized_hits)`, `sum by (subscription) (rate(authorized_calls[5m]))`, `(sum(limited_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(0)`. Kratos's own queries (see ADR-014) add the `limitador_namespace` filter since `user`/`subscription` aren't available here:
 ```promql
 sum(authorized_calls{limitador_namespace="llm/facebook-opt-125m-simulated-kserve-route"})
 sum(authorized_hits{limitador_namespace="llm/facebook-opt-125m-simulated-kserve-route"})
 ```
+
+**Why `authorized_hits` = tokens, not just another request counter**: this model has a Kuadrant `TokenRateLimitPolicy` (not a plain `RateLimitPolicy`) applied, confirmed `Enforced`. TokenRateLimitPolicy weights each "hit" by the request's actual token usage (parsed from the LLM response body) rather than counting 1 per request — confirmed by the live ~45:1 hits-to-calls ratio, a plausible tokens-per-request figure for this model, not a 1:1 ratio a plain request counter would show. The docs page confirms this is total (prompt+completion) tokens per request; prompt/completion split "requires upstream Kuadrant wasm-shim changes" (not currently available).
+
+**A second, inconsistent dashboard format in the same repo**: `deployment/components/observability/observability/dashboards/usage-dashboard.yaml` (a Perses dashboard, distinct from the canonical Grafana one linked from the docs page) uses `authorized_calls_total`/`authorized_hits_total`/`limited_calls_total` (`_total` suffix) with `user`/`subscription`/`model`/`limitador_namespace` labels — neither the suffix nor the richer labels match what's live on this cluster or what the canonical docs describe. Worth knowing this file exists and disagrees, but don't treat it as authoritative over the docs page + a live series check.
 
 ## maas-api (control-plane traffic — NOT what Kratos uses for request/token validation)
 
@@ -64,20 +74,59 @@ maas-api has **no metrics endpoint documented in the official observability docs
 
 ## vLLM (per-model inference metrics — not currently usable for Kratos's default target model)
 
-Standard vLLM Prometheus metric set, confirmed present (with real values) for models on this cluster that have a PodMonitor/ServiceMonitor — but **confirmed absent** for `facebook-opt-125m-simulated`, the only model MaaS currently exposes on this cluster, since it's a lightweight simulator without a real vLLM engine. Included here for completeness / future use if Kratos is ever pointed at a real vLLM-backed model.
+Exposed on `/metrics` port 8000. Supported backends per the docs: vLLM v0.7.x, llm-d v0.1.x, llm-d-inference-sim v0.8.2. Confirmed present (with real values) for models on this cluster that have a PodMonitor/ServiceMonitor — but **confirmed absent** for `facebook-opt-125m-simulated`, the only model MaaS currently exposes on this cluster, since it's a lightweight simulator, not one of those supported backends. Included here for completeness / future use if Kratos is ever pointed at a real vLLM-backed model.
 
-Confirmed present (on other, non-MaaS models on the same cluster): `vllm:request_success_total`, `vllm:prompt_tokens_total`, `vllm:generation_tokens_total`, `vllm:e2e_request_latency_seconds_{bucket,count,sum}`, `vllm:time_to_first_token_seconds_*`, `vllm:inter_token_latency_seconds_*`, `vllm:request_prompt_tokens_*`, `vllm:request_generation_tokens_*`, `vllm:num_requests_running`, `vllm:num_requests_waiting`, `vllm:kv_cache_usage_perc`, `vllm:prefix_cache_hits_total`/`queries_total`, `vllm:num_preemptions_total`, `vllm:spec_decode_num_accepted_tokens_total`/`draft_tokens_total`, `vllm:lora_requests_info`, `vllm:tool_call_parser_invocations_total`, and their corresponding `_created` counterparts. All labeled by `model_name`.
+| Metric | Type | Description |
+|---|---|---|
+| `vllm:num_requests_running` / `vllm:num_requests_waiting` | gauge | Requests currently processing / queued |
+| `vllm:request_prompt_tokens` / `vllm:request_generation_tokens` | histogram | Per-request token counts (`_sum` suffix gives the cumulative total) |
+| `vllm:prompt_tokens_total` / `vllm:generation_tokens_total` | counter | Total prompt/generation tokens processed (Python `prometheus_client` appends `_total`, unlike Limitador's metrics above) |
+| `vllm:kv_cache_usage_perc` | gauge | KV-cache usage, 0-1 |
+| `vllm:request_queue_time_seconds` | histogram | Time queued before processing (vLLM/llm-d only) |
+| `vllm:request_success_total` | counter | Successful requests |
+| `vllm:request_prefill_time_seconds` / `vllm:request_decode_time_seconds` | histogram | Prefill / decode phase time |
+
+All labeled by `model_name`. Also confirmed present on other models on this cluster (broader set beyond the docs' table): `vllm:e2e_request_latency_seconds_*`, `vllm:time_to_first_token_seconds_*`, `vllm:inter_token_latency_seconds_*`, `vllm:prefix_cache_hits_total`/`queries_total`, `vllm:num_preemptions_total`, `vllm:spec_decode_num_accepted_tokens_total`/`draft_tokens_total`, `vllm:lora_requests_info`, `vllm:tool_call_parser_invocations_total`, and each counter's `_created` counterpart. Some (e.g. `request_queue_time_seconds`) are lazily registered and won't appear until the relevant event first happens — a dashboard panel showing "No Data" doesn't necessarily mean the metric doesn't exist.
 
 For a real vLLM-backed model, total_tokens could alternatively be sourced as `sum(vllm:prompt_tokens_total{model_name="..."}) + sum(vllm:generation_tokens_total{model_name="..."})`.
 
-## Istio gateway and Authorino (listed from docs, not independently verified live)
+## Istio gateway (not independently verified live this session)
 
-Per the official ODH MaaS observability docs component table (not cross-checked with a live query during this research pass):
-- **Istio Gateway** — `/stats/prometheus` — `istio_requests_total`, `istio_request_duration_milliseconds_bucket` (gateway-level request counts and latency histograms).
-- **Authorino** — `/metrics`, `/server-metrics` — auth latency and success/deny rate (the AuthPolicy CRs seen on-cluster have per-filter `metrics: true` flags enabling some of this).
+`istio_request_duration_milliseconds_bucket`, labeled `destination_service_name` and `subscription` (intentionally *not* per-user, to bound cardinality). The `subscription` label isn't native to Istio — it's added via an Istio `Telemetry` CR that copies the `X-MaaS-Subscription` header (injected by the MaaS `AuthPolicy`) into a metric tag:
+```yaml
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: latency-per-subscription
+spec:
+  metrics:
+  - overrides:
+    - match: {metric: REQUEST_DURATION}
+      tagOverrides: {subscription: {value: 'request.headers["x-maas-subscription"]'}}
+```
+Example: `histogram_quantile(0.99, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=""}[5m])))` for P99 latency per subscription.
 
-If ever needed, verify these the same way Limitador was verified here — a live `/api/v1/series` query against Thanos Querier, not just the docs — since the Limitador case above showed real metric names/labels can differ from what's documented.
+## Authorino (not independently verified live this session)
+
+Exposed on `/server-metrics` port 8080 — note this is a **different** endpoint from the `authorino-operator-monitor` PodMonitor seen on-cluster (`kuadrant-system` namespace), which scrapes plain `/metrics` for generic controller-runtime metrics only. MaaS's own `authorino-server-metrics` ServiceMonitor is what scrapes `/server-metrics` for the auth-evaluation metrics below (the AuthPolicy CRs seen on-cluster have per-filter `metrics: true` flags enabling some of this, e.g. the `apiKeyValidation`/`subscription-info` evaluators).
+
+| Metric | Type | Labels |
+|---|---|---|
+| `auth_server_authconfig_total` | counter | `namespace`, `authconfig` |
+| `auth_server_authconfig_duration_seconds` | histogram | `namespace`, `authconfig` |
+| `auth_server_authconfig_response_status` | counter | `namespace`, `authconfig`, `status` |
+| `auth_server_response_status` | counter | `status` |
+| `auth_server_evaluator_total` | counter | `namespace`, `authconfig`, `evaluator_type`, `evaluator_name` |
+| `auth_server_evaluator_cancelled` | counter | same as above — evaluator failures/cancellations |
+
+For MaaS-specific evaluators, filter `evaluator_type="METADATA_GENERIC_HTTP"` and `evaluator_name=~"apiKeyValidation|subscription-info"` — like everything else in this doc's Limitador section, these series only appear after traffic actually hits each evaluator.
+
+If ever needed for Kratos, verify the above the same way Limitador was verified — a live `/api/v1/series` query against Thanos Querier, not just the docs — since the Limitador case in this doc showed real label availability can differ from what's documented even when the metric names match.
+
+## Grafana dashboards (not deployed/verified this session)
+
+Upstream ships two pre-built dashboards (`./scripts/observability/install-grafana-dashboards.sh`, needs a cluster-wide Grafana instance labeled `app=grafana`): a **Platform Admin** dashboard (component health, token/request/success-rate/latency summary, per-model and per-subscription traffic breakdown, top users, resource allocation) and an **AI Engineer** dashboard (a caller's own usage summary/trends). Manual-import JSON for a token-metrics-focused dashboard: [`maas-token-metrics-dashboard.json`](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json). Neither was deployed on the researched cluster — Kratos doesn't depend on them, but they're the human-facing equivalent of what `MAAS_METRICS_QUERIES` queries programmatically.
 
 ## See also
 - ADR-014 (`docs/architecture/adrs/ADR-014-maas-metrics-cross-validation.md`) for the actual decision, what Kratos wires up, and why.
-- Upstream docs: `opendatahub-io.github.io/models-as-a-service/latest/observability/`
+- Upstream docs: [`opendatahub-io.github.io/models-as-a-service/latest/observability/metrics-and-dashboards/`](https://opendatahub-io.github.io/models-as-a-service/latest/observability/metrics-and-dashboards/) — the canonical source for this doc's Limitador/vLLM/Istio/Authorino/Grafana content; raw source read directly (`docs/content/observability/metrics-and-dashboards.md` in the repo) rather than relying on a summarized fetch of the rendered page, after an earlier summarized pass introduced a metric-naming inaccuracy this doc has since corrected.

@@ -49,18 +49,28 @@ class ScenarioRunner:
         task_defs: list[dict] = scenario.get("tasks") or []
         shared_state: dict = {}
 
-        def _write_assertions(results: list) -> None:
+        def _assertion_dict(r: object, task_name: str | None) -> dict:
+            return {
+                "task": task_name,
+                "name": r.name,  # type: ignore[attr-defined]
+                "status": r.status,  # type: ignore[attr-defined]
+                "value": r.current_value,  # type: ignore[attr-defined]
+                "expected_value": r.expected_value,  # type: ignore[attr-defined]
+                "expression": r.expression,  # type: ignore[attr-defined]
+            }
+
+        def _write_assertions(
+            completed_task_results: list,
+            current_task_name: str | None,
+            current_task_assertion_results: list,
+            global_assertion_results: list,
+        ) -> None:
             """Write current assertion state to the dedicated PVC file."""
-            payload = [
-                {
-                    "name": r.name,
-                    "status": r.status,
-                    "value": r.current_value,
-                    "expected_value": r.expected_value,
-                    "expression": r.expression,
-                }
-                for r in results
-            ]
+            payload = (
+                [_assertion_dict(r, tr.task_name) for tr in completed_task_results for r in tr.assertions]
+                + [_assertion_dict(r, current_task_name) for r in current_task_assertion_results]
+                + [_assertion_dict(r, None) for r in global_assertion_results]
+            )
             try:
                 _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
                 (_RESULTS_DIR / f"{self.run_id}-assertions.json").write_text(
@@ -81,6 +91,14 @@ class ScenarioRunner:
                     cp = task_completed_progress.get(task.name)
                     if cp:
                         entry["progress"] = cp
+                    task_assertions = completed[i].assertions
+                    if task_assertions:
+                        if any(a.status == "FAILING" for a in task_assertions):
+                            entry["assertions_status"] = "FAILING"
+                        elif all(a.status == "PASSING" for a in task_assertions):
+                            entry["assertions_status"] = "PASSING"
+                        else:
+                            entry["assertions_status"] = "PENDING"
                     task_list.append(entry)
                 elif i == current_idx:
                     entry: dict = {"name": task.name, "status": "RUNNING"}
@@ -98,12 +116,20 @@ class ScenarioRunner:
             except OSError as exc:
                 print(f"[runner] could not write progress: {exc}", flush=True)
 
+        current_task_assertions: dict[str, str | dict] = {}
+
         async def emit() -> None:
             now = time.monotonic()
             if now - self._last_emit < _EMIT_DEBOUNCE_S:
                 return
             self._last_emit = now
-            _write_assertions(evaluate_all_assertions(assertions, shared_state))
+            task_name = tasks[current_task_idx].name if current_task_idx >= 0 else None
+            _write_assertions(
+                completed_task_results=task_results,
+                current_task_name=task_name,
+                current_task_assertion_results=evaluate_all_assertions(current_task_assertions, shared_state),
+                global_assertion_results=evaluate_all_assertions(assertions, shared_state),
+            )
             _write_progress(current_task_idx, task_results)
 
         sa_token = _read_sa_token(config)
@@ -164,8 +190,9 @@ class ScenarioRunner:
                 shared_state["metrics_baseline"] = baseline
             metrics_bg = asyncio.create_task(_metrics_bg())
 
-        for i, task in enumerate(tasks):
+        for i, (task, task_def) in enumerate(zip(tasks, task_defs)):
             current_task_idx = i
+            current_task_assertions = task_def.get("assertions") or {}
             _write_progress(i, task_results)
             print(f"[runner] task: {task.name}", flush=True)
             start = time.monotonic()
@@ -174,6 +201,13 @@ class ScenarioRunner:
                 tp = shared_state.pop("task_progress", None)
                 if tp:
                     task_completed_progress[task.name] = tp
+                if current_task_assertions:
+                    await _fetch_metrics_once()
+                    task_assertion_results = evaluate_all_assertions(current_task_assertions, shared_state)
+                    result.assertions = task_assertion_results
+                    if result.status == "PASS" and any(a.status == "FAILING" for a in task_assertion_results):
+                        result.status = "FAIL"
+                        result.error = "assertions failed at task completion"
                 task_results.append(result)
                 if result.status == "FAIL":
                     run_failed = True
@@ -234,7 +268,14 @@ class ScenarioRunner:
 
         assertion_results = evaluate_all_assertions(assertions, shared_state)
         # Final (non-debounced) writes so files reflect the definitive end state.
-        _write_assertions(assertion_results)
+        # current_task_assertions cleared — all task assertions are now frozen in task_results.
+        current_task_assertions = {}
+        _write_assertions(
+            completed_task_results=task_results,
+            current_task_name=None,
+            current_task_assertion_results=[],
+            global_assertion_results=assertion_results,
+        )
         _write_progress(len(tasks), task_results)
         status = "FAIL" if run_failed else compute_run_status(task_results, assertion_results)
 
