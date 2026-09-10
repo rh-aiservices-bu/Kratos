@@ -28,6 +28,7 @@ const TASK_STATUS_COLOR: Record<TaskProgressEntry['status'], string> = {
   RUNNING: '#1565c0',
   DONE: '#2e7d32',
   FAIL: '#c62828',
+  CANCELLED: '#b26a00',
 };
 
 function formatValue(v: number | null): string {
@@ -170,7 +171,10 @@ export function AssertionPanel({ assertions, taskProgress }: Props) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         {taskGroups.map(({ key, entries, progress }, idx) => {
           const isRunning = progress?.status === 'RUNNING';
-          const isDone = progress?.status === 'DONE' || progress?.status === 'FAIL';
+          const isDone =
+            progress?.status === 'DONE' ||
+            progress?.status === 'FAIL' ||
+            progress?.status === 'CANCELLED';
           // Mute completed tasks when there is still a running task after them
           const muted = isDone && runningIdx > idx;
           return (

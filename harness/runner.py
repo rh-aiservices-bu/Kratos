@@ -5,6 +5,7 @@ import os
 import re
 import time
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 _SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -19,6 +20,76 @@ def _read_sa_token(config: dict) -> str:
         return Path(_SA_TOKEN_PATH).read_text().strip()
     except OSError:
         return ""
+
+
+_SENSITIVE_CONFIG_KEY_RE = re.compile(r"(?:^|_)(token|secret|password)(?:$|_)", re.IGNORECASE)
+# Deliberately excludes "key" as a generic substring: this app's whole domain is
+# provisioning MaaS API *keys*, so plain substring matching false-positived hard
+# on entirely non-sensitive fields like key_name/key_pool/total_tokens/
+# maas_tokens_match (confirmed live — the last one nuked a whole assertion, not
+# just a leaf value, since the check runs on every dict key at every depth). No
+# resolved config/task-param field in this codebase actually carries raw key
+# material anyway — created key values live only in shared_state at runtime,
+# never in scenario config, so they never reach this snapshot in the first place.
+
+# Cluster-level settings worth showing alongside a scenario's own config even
+# though they come from the global ConfigMap rather than the scenario YAML.
+_GLOBAL_CONFIG_KEYS = ("MAAS_API_URL", "MAAS_METRICS_URL", "DEFAULT_MODEL", "DEFAULT_SUBSCRIPTION")
+
+
+def _merged_config_block(scenario: dict, resolved_config: dict) -> dict:
+    """The effective config: block for this run — the scenario's own declared
+    config: keys (defaults with any launch-time overrides actually applied),
+    merged with a small curated set of cluster-level settings the scenario
+    doesn't declare itself but that affect what it actually talked to.
+    _resolved_config is a merge of the *entire* process environment
+    (harness/config.py:load_scenario's global_config = dict(os.environ)),
+    so this deliberately keeps only these two groups rather than everything —
+    container plumbing (PATH, HOSTNAME, KUBERNETES_*, PYTHON_*, ...) was never
+    anyone's "setting". Sorted so the rendered YAML reads consistently.
+    """
+    keys = list((scenario.get("config") or {}).keys())
+    keys += [k for k in _GLOBAL_CONFIG_KEYS if k in resolved_config]
+    return {k: resolved_config[k] for k in sorted(keys) if k in resolved_config}
+
+
+def _scenario_settings_snapshot(scenario: dict, resolved_config: dict) -> dict:
+    """A scenario-YAML-shaped snapshot of this run — meant to be pasted directly
+    into a new scenarios/*.yaml file to reproduce it exactly, not just inspected.
+    Reuses the scenario's own tasks/assertions/metrics_queries/cleanup verbatim
+    (already ${config.x}-resolved by harness/config.py:load_scenario, and
+    unaffected by config overrides) and replaces config: with this run's actual
+    merged values (see _merged_config_block).
+    """
+    snapshot: dict = {
+        "name": scenario.get("name"),
+        "description": scenario.get("description"),
+        "config": _merged_config_block(scenario, resolved_config),
+    }
+    if scenario.get("metrics_queries"):
+        snapshot["metrics_queries"] = scenario["metrics_queries"]
+    snapshot["tasks"] = scenario.get("tasks") or []
+    if scenario.get("assertions"):
+        snapshot["assertions"] = scenario["assertions"]
+    snapshot["cleanup"] = scenario.get("cleanup", "automatic")
+    return snapshot
+
+
+def _redact_sensitive_config(value):
+    """Recursively mask likely-sensitive values before a run's snapshot is
+    written where a user can view it (GET /api/runs/{id}/config) — a dict key
+    matching token|secret|password|key at *any* nesting depth is masked, since a
+    resolved ${config.target_token}-style value can end up inside a task's
+    params or an assertion, not just the top-level config: block.
+    """
+    if isinstance(value, dict):
+        return {
+            k: ("***REDACTED***" if _SENSITIVE_CONFIG_KEY_RE.search(k) else _redact_sensitive_config(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive_config(v) for v in value]
+    return value
 
 from harness.config import load_scenario
 from harness.metrics_client import fetch_metrics
@@ -175,18 +246,89 @@ def _substitute_harness_vars(template: str, shared_state: dict) -> str | None:
 
 
 class ScenarioRunner:
-    def __init__(self, scenario_path: str, run_id: str) -> None:
+    def __init__(
+        self, scenario_path: str, run_id: str, stop_event: asyncio.Event | None = None
+    ) -> None:
         self.scenario_path = scenario_path
         self.run_id = run_id
         self._last_emit: float = 0.0
+        # Set by harness/main.py's SIGTERM handler when the API server asks this run
+        # to stop gracefully (see api/k8s.py:stop_run). Checked between tasks and
+        # raced against in-flight awaits so a stop interrupts promptly rather than
+        # waiting out whatever's currently in progress, while still falling through
+        # to the normal task cleanup loop below instead of skipping it.
+        self._stop_event = stop_event
+
+    async def _interruptible_sleep(self, seconds: float) -> None:
+        """Like asyncio.sleep, but wakes immediately if a stop is requested."""
+        if not self._stop_event:
+            await asyncio.sleep(seconds)
+            return
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self._stop_event.wait(), timeout=seconds)
+
+    async def _run_task_or_stop(
+        self, task: Task, ctx: TaskContext, start: float
+    ) -> tuple[TaskResult, bool]:
+        """Run task.run(ctx), racing it against a stop request.
+
+        Returns (result, stopped). If a stop wins the race, the in-flight task.run()
+        coroutine is cancelled and awaited here (its CancelledError is expected and
+        suppressed), and a CANCELLED TaskResult is returned instead — the caller
+        still falls through to the normal cleanup loop exactly like any other exit
+        from the task loop, so partial state (e.g. some but not all API keys already
+        provisioned) still gets cleaned up.
+        """
+        if not self._stop_event:
+            return await task.run(ctx), False
+
+        run_future = asyncio.ensure_future(task.run(ctx))
+        stop_waiter = asyncio.ensure_future(self._stop_event.wait())
+        done, _ = await asyncio.wait(
+            {run_future, stop_waiter}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if run_future in done:
+            stop_waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_waiter
+            return run_future.result(), False
+
+        run_future.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await run_future
+        duration_ms = (time.monotonic() - start) * 1000
+        return (
+            TaskResult(
+                task_name=task.name,
+                status="CANCELLED",
+                duration_ms=duration_ms,
+                error="run stopped by user",
+            ),
+            True,
+        )
 
     async def run(self) -> RunResult:
+        run_start = time.monotonic()
+        run_started_at = datetime.now(timezone.utc).isoformat()
         scenario = load_scenario(self.scenario_path)
         scenario_name: str = scenario["name"]
         config: dict = scenario.get("_resolved_config", {})
         assertions: dict[str, str | dict] = scenario.get("assertions") or {}
         task_defs: list[dict] = scenario.get("tasks") or []
         shared_state: dict = {}
+        current_task_started_at: str | None = None
+
+        # Written once, before the task loop starts, so a run's effective settings
+        # are viewable from the moment it begins (GET /api/runs/{id}/config) rather
+        # than only after it finishes — the resolved config never changes mid-run.
+        try:
+            _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+            snapshot = _redact_sensitive_config(_scenario_settings_snapshot(scenario, config))
+            (_RESULTS_DIR / f"{self.run_id}-config.json").write_text(
+                json.dumps(snapshot), encoding="utf-8"
+            )
+        except OSError as exc:
+            print(f"[runner] could not write config snapshot: {exc}", flush=True)
 
         def _assertion_dict(r: object, task_name: str | None) -> dict:
             return {
@@ -225,8 +367,12 @@ class ScenarioRunner:
             task_list = []
             for i, task in enumerate(tasks):
                 if i < len(completed):
-                    chip_status = "DONE" if completed[i].status == "PASS" else "FAIL"
-                    entry: dict = {"name": task.name, "status": chip_status}
+                    chip_status = "DONE" if completed[i].status == "PASS" else completed[i].status
+                    entry: dict = {
+                        "name": task.name,
+                        "status": chip_status,
+                        "duration_ms": completed[i].duration_ms,
+                    }
                     cp = task_completed_progress.get(task.name)
                     if cp:
                         entry["progress"] = cp
@@ -241,6 +387,8 @@ class ScenarioRunner:
                     task_list.append(entry)
                 elif i == current_idx:
                     entry: dict = {"name": task.name, "status": "RUNNING"}
+                    if current_task_started_at:
+                        entry["started_at"] = current_task_started_at
                     tp = shared_state.get("task_progress")
                     if tp:
                         entry["progress"] = tp
@@ -250,7 +398,8 @@ class ScenarioRunner:
             try:
                 _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
                 (_RESULTS_DIR / f"{self.run_id}-progress.json").write_text(
-                    json.dumps({"tasks": task_list}), encoding="utf-8"
+                    json.dumps({"tasks": task_list, "run_started_at": run_started_at}),
+                    encoding="utf-8",
                 )
             except OSError as exc:
                 print(f"[runner] could not write progress: {exc}", flush=True)
@@ -330,9 +479,10 @@ class ScenarioRunner:
             while True:
                 await _fetch_metrics_once()
                 results = evaluate_all_assertions(assertions_to_check, shared_state)
-                if all(r.status == "PASSING" for r in results) or elapsed >= max_wait_s:
+                stopped = bool(self._stop_event and self._stop_event.is_set())
+                if all(r.status == "PASSING" for r in results) or elapsed >= max_wait_s or stopped:
                     return results
-                await asyncio.sleep(_METRICS_FINAL_POLL_INTERVAL_S)
+                await self._interruptible_sleep(_METRICS_FINAL_POLL_INTERVAL_S)
                 elapsed += _METRICS_FINAL_POLL_INTERVAL_S
 
         async def _metrics_bg() -> None:
@@ -340,7 +490,7 @@ class ScenarioRunner:
                 await _fetch_metrics_once()
                 if shared_state.get("metrics"):
                     await emit()
-                await asyncio.sleep(5)
+                await self._interruptible_sleep(5)
 
         ctx = TaskContext(
             run_id=self.run_id,
@@ -377,13 +527,22 @@ class ScenarioRunner:
             metrics_bg = asyncio.create_task(_metrics_bg())
 
         for i, (task, task_def) in enumerate(zip(tasks, task_defs)):
+            if self._stop_event and self._stop_event.is_set():
+                break
             current_task_idx = i
             current_task_assertions = task_def.get("assertions") or {}
+            current_task_started_at = datetime.now(timezone.utc).isoformat()
             _write_progress(i, task_results)
             print(f"[runner] task: {task.name}", flush=True)
             start = time.monotonic()
             try:
-                result = await task.run(ctx)
+                result, stopped = await self._run_task_or_stop(task, ctx, start)
+                if stopped:
+                    tp = shared_state.pop("task_progress", None)
+                    if tp:
+                        task_completed_progress[task.name] = tp
+                    task_results.append(result)
+                    break
                 if current_task_assertions:
                     # Settling can take a while (up to max_wait_s) — leave
                     # shared_state["task_progress"] in place until it's done, so the
@@ -452,7 +611,12 @@ class ScenarioRunner:
             global_assertion_results=assertion_results,
         )
         _write_progress(len(tasks), task_results)
-        status = "FAIL" if run_failed else compute_run_status(task_results, assertion_results)
+        stopped = bool(self._stop_event and self._stop_event.is_set())
+        status = (
+            "CANCELLED" if stopped
+            else "FAIL" if run_failed
+            else compute_run_status(task_results, assertion_results)
+        )
 
         return RunResult(
             run_id=self.run_id,
@@ -460,4 +624,5 @@ class ScenarioRunner:
             status=status,
             tasks=task_results,
             assertions=assertion_results,
+            duration_ms=(time.monotonic() - run_start) * 1000,
         )

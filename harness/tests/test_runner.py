@@ -1,4 +1,5 @@
 import asyncio
+import json
 import textwrap
 import time
 from pathlib import Path
@@ -835,3 +836,204 @@ def test_stub_failing_scenario_produces_fail_with_cleanup(
     out = capsys.readouterr().out
     assert "[stub_pass] cleanup" in out
     assert "[stub_fail] cleanup" in out
+
+
+def test_run_result_has_positive_duration_ms() -> None:
+    result = asyncio.run(ScenarioRunner("scenarios/stub.yaml", "duration-001").run())
+    assert result.status == "PASS"
+    assert result.duration_ms > 0
+
+
+def test_stop_event_cancels_in_flight_task_and_still_runs_cleanup(tmp_path: Path) -> None:
+    """A stop request mid-task cancels that task's in-flight run() (rather than
+    waiting for it to finish on its own) and still falls through to the normal
+    cleanup loop — the whole point of a *graceful* stop.
+    """
+    cleaned: list[str] = []
+
+    class _LongRunningTask(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            await asyncio.sleep(10)  # would hang this test if not actually cancelled
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            cleaned.append(self.name)
+
+    REGISTRY["_long_running"] = _LongRunningTask
+
+    try:
+        path = _write(tmp_path, """
+            name: test_stop_mid_task
+            config: {}
+            tasks:
+              - name: _long_running
+                params: {}
+            assertions: {}
+        """)
+
+        async def _drive():
+            stop_event = asyncio.Event()
+            run_future = asyncio.ensure_future(
+                ScenarioRunner(path, "stop-001", stop_event=stop_event).run()
+            )
+            await asyncio.sleep(0.05)
+            stop_event.set()
+            return await run_future
+
+        t0 = time.monotonic()
+        result = asyncio.run(_drive())
+        elapsed = time.monotonic() - t0
+
+        assert elapsed < 5.0, "stop did not interrupt the in-flight task promptly"
+        assert result.status == "CANCELLED"
+        assert len(result.tasks) == 1
+        assert result.tasks[0].status == "CANCELLED"
+        assert result.tasks[0].error == "run stopped by user"
+        assert cleaned == ["_long_running"], "cleanup must still run for a cancelled task"
+    finally:
+        REGISTRY.pop("_long_running", None)
+
+
+def test_stop_event_set_before_run_skips_all_tasks(tmp_path: Path) -> None:
+    ran: list[str] = []
+
+    class _ShouldNotRun(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            ran.append(self.name)
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            pass
+
+    REGISTRY["_should_not_run"] = _ShouldNotRun
+
+    try:
+        path = _write(tmp_path, """
+            name: test_stop_before_start
+            config: {}
+            tasks:
+              - name: _should_not_run
+                params: {}
+            assertions: {}
+        """)
+        stop_event = asyncio.Event()
+        stop_event.set()
+        result = asyncio.run(ScenarioRunner(path, "stop-002", stop_event=stop_event).run())
+
+        assert result.status == "CANCELLED"
+        assert ran == [], "a task must not start once a stop has already been requested"
+        assert result.tasks == []
+    finally:
+        REGISTRY.pop("_should_not_run", None)
+
+
+def test_progress_json_includes_run_started_at_and_task_durations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harness import runner as runner_module
+
+    monkeypatch.setattr(runner_module, "_RESULTS_DIR", tmp_path)
+
+    result = asyncio.run(ScenarioRunner("scenarios/stub.yaml", "progress-fields-001").run())
+    assert result.status == "PASS"
+
+    payload = json.loads((tmp_path / "progress-fields-001-progress.json").read_text())
+    assert "run_started_at" in payload
+    assert payload["run_started_at"]
+    for entry in payload["tasks"]:
+        assert entry["status"] == "DONE"
+        assert "duration_ms" in entry
+
+
+def test_config_snapshot_is_scenario_shaped_and_redacts_top_level_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The snapshot must be shaped like an actual scenario file (name/config/
+    tasks/cleanup), not a flat list — the whole point is that a user can paste it
+    into a new scenarios/*.yaml file to reproduce the run exactly."""
+    from harness import runner as runner_module
+
+    monkeypatch.setattr(runner_module, "_RESULTS_DIR", tmp_path)
+
+    path = _write(tmp_path, """
+        name: test_config_snapshot
+        description: "a test scenario"
+        config:
+          request_count: 5
+          api_token: "supersecret"
+        tasks:
+          - name: stub_pass
+            params: {}
+        assertions: {}
+        cleanup: automatic
+    """)
+    result = asyncio.run(ScenarioRunner(path, "config-snap-001").run())
+    assert result.status == "PASS"
+
+    snapshot = json.loads((tmp_path / "config-snap-001-config.json").read_text())
+    assert snapshot["name"] == "test_config_snapshot"
+    assert snapshot["description"] == "a test scenario"
+    assert snapshot["cleanup"] == "automatic"
+    assert snapshot["tasks"][0]["name"] == "stub_pass"
+    assert snapshot["config"]["request_count"] == 5
+    assert snapshot["config"]["api_token"] == "***REDACTED***"
+
+
+def test_config_snapshot_redacts_sensitive_values_inside_task_params(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resolved ${config.target_token}-style value can end up inside a task's
+    params, not just the top-level config: block — redaction must be recursive."""
+    from harness import runner as runner_module
+
+    monkeypatch.setattr(runner_module, "_RESULTS_DIR", tmp_path)
+
+    path = _write(tmp_path, """
+        name: test_task_param_redaction
+        config:
+          target_token: "supersecret"
+        tasks:
+          - name: stub_pass
+            params:
+              token: "${config.target_token}"
+        assertions: {}
+    """)
+    result = asyncio.run(ScenarioRunner(path, "config-snap-002").run())
+    assert result.status == "PASS"
+
+    snapshot = json.loads((tmp_path / "config-snap-002-config.json").read_text())
+    assert snapshot["tasks"][0]["params"]["token"] == "***REDACTED***"
+
+
+def test_config_snapshot_excludes_incidental_environment_noise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_resolved_config is a merge of the *entire* process environment (see
+    harness/config.py:load_scenario) — the snapshot's config: block must narrow
+    that down to the scenario's own declared config: keys plus curated global
+    settings, not dump every container-plumbing env var (PATH, HOSTNAME, etc.).
+    """
+    from harness import runner as runner_module
+
+    monkeypatch.setattr(runner_module, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setenv("MAAS_API_URL", "https://maas.example.com")
+    monkeypatch.setenv("SOME_UNRELATED_ENV_VAR", "noise")
+
+    path = _write(tmp_path, """
+        name: test_config_noise
+        config:
+          request_count: 5
+        tasks:
+          - name: stub_pass
+            params: {}
+        assertions: {}
+    """)
+    result = asyncio.run(ScenarioRunner(path, "config-noise-001").run())
+    assert result.status == "PASS"
+
+    config = json.loads((tmp_path / "config-noise-001-config.json").read_text())["config"]
+    assert config["request_count"] == 5
+    assert config["MAAS_API_URL"] == "https://maas.example.com"
+    assert "SOME_UNRELATED_ENV_VAR" not in config
+    assert "PATH" not in config
+    assert "PATH" not in config

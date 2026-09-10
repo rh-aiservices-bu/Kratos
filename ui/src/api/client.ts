@@ -10,6 +10,7 @@ export interface Run {
   status: string;
   created_at: string;
   updated_at: string;
+  duration_ms?: number | null;
 }
 
 export interface AssertionState {
@@ -58,21 +59,44 @@ export async function getRun(runId: string): Promise<Run> {
   return r.json() as Promise<Run>;
 }
 
-export interface TaskProgressEntry {
-  name: string;
-  status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAIL';
-  progress?: { current: number; total: number };
-  assertions_status?: 'PASSING' | 'FAILING' | 'PENDING';
+export async function stopRun(runId: string): Promise<void> {
+  const r = await fetch(`/api/runs/${runId}/stop`, { method: 'POST' });
+  if (!r.ok) throw new Error(`stopRun failed: ${r.status}`);
 }
 
-export async function getProgress(runId: string): Promise<TaskProgressEntry[]> {
+export interface TaskProgressEntry {
+  name: string;
+  status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAIL' | 'CANCELLED';
+  progress?: { current: number; total: number };
+  assertions_status?: 'PASSING' | 'FAILING' | 'PENDING';
+  started_at?: string;
+  duration_ms?: number;
+}
+
+export interface ProgressResponse {
+  tasks: TaskProgressEntry[];
+  run_started_at?: string;
+}
+
+export async function getProgress(runId: string): Promise<ProgressResponse> {
   try {
     const r = await fetch(`/api/runs/${runId}/progress`);
-    if (!r.ok) return [];
-    const data = (await r.json()) as { tasks: TaskProgressEntry[] };
-    return data.tasks ?? [];
+    if (!r.ok) return { tasks: [] };
+    const data = (await r.json()) as ProgressResponse;
+    return { tasks: data.tasks ?? [], run_started_at: data.run_started_at };
   } catch {
-    return [];
+    return { tasks: [] };
+  }
+}
+
+export async function getRunConfig(runId: string): Promise<string | null> {
+  try {
+    const r = await fetch(`/api/runs/${runId}/config`);
+    if (!r.ok) return null;
+    const data = (await r.json()) as { config_yaml: string | null };
+    return data.config_yaml ?? null;
+  } catch {
+    return null;
   }
 }
 

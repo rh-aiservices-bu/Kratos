@@ -17,7 +17,7 @@ _EXPR_RE = re.compile(r"^\s*(<=|>=|<|>|==)\s*(.+?)\s*$")
 @dataclass
 class TaskResult:
     task_name: str
-    status: Literal["PASS", "FAIL"]
+    status: Literal["PASS", "FAIL", "CANCELLED"]
     duration_ms: float
     error: str | None = None
     assertions: list["AssertionResult"] = field(default_factory=list)
@@ -36,9 +36,10 @@ class AssertionResult:
 class RunResult:
     run_id: str
     scenario_name: str
-    status: Literal["PASS", "FAIL"]
+    status: Literal["PASS", "FAIL", "CANCELLED"]
     tasks: list[TaskResult] = field(default_factory=list)
     assertions: list[AssertionResult] = field(default_factory=list)
+    duration_ms: float = 0.0
 
 
 def _extract_metric(name: str, shared_state: dict) -> float | None:

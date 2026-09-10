@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api.db import get_db_path, init_db
 from api.routes.assertions import router as assertions_router
+from api.routes.config import router as config_router
 from api.routes.logs import router as logs_router
 from api.routes.progress import router as progress_router
 from api.routes.runs import router as runs_router
@@ -33,17 +34,19 @@ async def _sync_completed_runs() -> None:
         try:
             data = json.loads(result_path.read_text())
             status = data.get("status", "FAIL")
+            duration_ms = data.get("duration_ms")
         except Exception:
             print(
                 f"[api] could not read result for {run_id}\n{traceback.format_exc()}",
                 flush=True,
             )
             status = "FAIL"
+            duration_ms = None
 
         async with aiosqlite.connect(get_db_path()) as db:
             await db.execute(
-                "UPDATE runs SET status=?, updated_at=? WHERE id=?",
-                (status, datetime.now(timezone.utc).isoformat(), run_id),
+                "UPDATE runs SET status=?, updated_at=?, duration_ms=? WHERE id=?",
+                (status, datetime.now(timezone.utc).isoformat(), duration_ms, run_id),
             )
             await db.commit()
         print(f"[api] run {run_id} → {status}", flush=True)
@@ -72,6 +75,7 @@ app.include_router(runs_router)
 app.include_router(logs_router)
 app.include_router(assertions_router)
 app.include_router(progress_router)
+app.include_router(config_router)
 
 _ui_dist = Path(__file__).parent.parent / "ui" / "dist"
 if _ui_dist.exists():

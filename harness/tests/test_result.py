@@ -2,6 +2,7 @@ import pytest
 
 from harness.result import (
     AssertionResult,
+    RunResult,
     TaskResult,
     compute_run_status,
     evaluate_all_assertions,
@@ -251,3 +252,23 @@ def test_run_status_pass_with_pending_assertions() -> None:
     tasks = [TaskResult("t1", "PASS", 100.0)]
     assertions = [AssertionResult("x", "< 5", "PENDING")]
     assert compute_run_status(tasks, assertions) == "PASS"
+
+
+def test_run_result_duration_ms_defaults_to_zero() -> None:
+    result = RunResult(run_id="r1", scenario_name="s", status="PASS")
+    assert result.duration_ms == 0.0
+
+
+def test_run_result_duration_ms_passthrough() -> None:
+    result = RunResult(run_id="r1", scenario_name="s", status="PASS", duration_ms=1234.5)
+    assert result.duration_ms == 1234.5
+
+
+def test_task_result_accepts_cancelled_status() -> None:
+    t = TaskResult(task_name="t1", status="CANCELLED", duration_ms=50.0, error="run stopped by user")
+    assert t.status == "CANCELLED"
+
+
+def test_run_result_accepts_cancelled_status() -> None:
+    result = RunResult(run_id="r1", scenario_name="s", status="CANCELLED")
+    assert result.status == "CANCELLED"

@@ -1,3 +1,4 @@
+import contextlib
 import os
 from pathlib import Path
 
@@ -20,15 +21,17 @@ async def init_db() -> None:
                 status           TEXT NOT NULL DEFAULT 'PENDING',
                 created_at       TEXT NOT NULL,
                 updated_at       TEXT NOT NULL,
-                config_overrides TEXT
+                config_overrides TEXT,
+                duration_ms      REAL
             )
             """
         )
         # Migration: add config_overrides column to existing databases
-        try:
+        with contextlib.suppress(Exception):
             await db.execute("ALTER TABLE runs ADD COLUMN config_overrides TEXT")
-        except Exception:
-            pass  # column already exists
+        # Migration: add duration_ms column to existing databases
+        with contextlib.suppress(Exception):
+            await db.execute("ALTER TABLE runs ADD COLUMN duration_ms REAL")
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS task_results (

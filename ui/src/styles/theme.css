@@ -282,6 +282,10 @@
   background: #e8f0fe;
 }
 
+.kratos-task-chip--cancelled {
+  background: #fff3e0;
+}
+
 .kratos-task-chip__icon {
   font-size: 0.9rem;
   color: var(--task-color, #9e9e9e);
@@ -308,6 +312,13 @@
   font-size: 0.78rem;
   font-weight: 600;
   color: #333;
+  white-space: nowrap;
+}
+
+.kratos-task-chip__duration {
+  font-size: 0.7rem;
+  color: #888;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
   white-space: nowrap;
 }
 

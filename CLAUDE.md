@@ -21,9 +21,11 @@ Tests are composed of atomic **tasks** (e.g., provision API key, send inference 
                   - GET  /api/scenarios
                   - POST /api/runs  (accepts config_overrides)
                   - GET  /api/runs, /api/runs/{id}
+                  - POST /api/runs/{id}/stop                  (graceful stop, see below)
                   - GET  /api/runs/{id}/logs/lines?offset=N  (REST poll)
                   - GET  /api/runs/{id}/assertions            (reads PVC file)
                   - GET  /api/runs/{id}/progress              (reads PVC file)
+                  - GET  /api/runs/{id}/config                (reads PVC file, YAML text)
                   - Creates K8s Jobs, captures pod logs to PVC
                   - SQLite run history on PVC
                           |
@@ -31,8 +33,9 @@ Tests are composed of atomic **tasks** (e.g., provision API key, send inference 
                   - Reads global ConfigMap + scenario YAML
                   - Executes tasks in order using SA token
                   - Background MaaS metrics poller (every 5s, if MAAS_METRICS_URL set)
-                  - Runs cleanup at end (pass or fail)
-                  - Writes assertions + progress to PVC in real time
+                  - SIGTERM handler: breaks the task loop, still runs cleanup
+                  - Runs cleanup at end (pass, fail, or stopped)
+                  - Writes assertions + progress + config snapshot to PVC in real time
 ```
 
 ## MaaS API (key facts)
@@ -52,9 +55,9 @@ Tests are composed of atomic **tasks** (e.g., provision API key, send inference 
 kratos/
 ├── harness/                    # Test runner (K8s Job entrypoint)
 │   ├── __init__.py
-│   ├── main.py                 # Job entrypoint: load config, run scenario, cleanup
-│   ├── runner.py               # ScenarioRunner: executes tasks, records results
-│   ├── result.py               # RunResult dataclass + assertion evaluation
+│   ├── main.py                 # Job entrypoint: registers SIGTERM handler, load config, run scenario, cleanup
+│   ├── runner.py               # ScenarioRunner: executes tasks, records results, handles graceful stop
+│   ├── result.py               # RunResult/TaskResult dataclasses (status incl. CANCELLED, duration_ms) + assertion evaluation
 │   ├── config.py               # Config loader: merges global ConfigMap + scenario YAML
 │   ├── metrics_client.py       # fetch_metrics: shared Thanos Querier client (background poller + check_maas_metrics both use this)
 │   └── tasks/
@@ -77,13 +80,14 @@ kratos/
 │   ├── __init__.py
 │   ├── main.py                 # FastAPI app, mounts static UI
 │   ├── db.py                   # SQLite setup (aiosqlite)
-│   ├── k8s.py                  # Create Jobs; background thread log capture to PVC; REST log reading
+│   ├── k8s.py                  # Create Jobs; stop_run() deletes a run's pod with a grace period; background thread log capture to PVC; REST log reading
 │   └── routes/
 │       ├── scenarios.py        # GET /api/scenarios (includes config defaults from YAML)
-│       ├── runs.py             # POST /api/runs (config_overrides), GET /api/runs, GET /api/runs/{id}
+│       ├── runs.py             # POST /api/runs (config_overrides), GET /api/runs, GET /api/runs/{id}, POST /api/runs/{id}/stop
 │       ├── logs.py             # GET /api/runs/{id}/logs/lines?offset=N  (REST poll, no SSE)
 │       ├── assertions.py       # GET /api/runs/{id}/assertions  (reads /data/results/<id>-assertions.json)
-│       └── progress.py         # GET /api/runs/{id}/progress    (reads /data/results/<id>-progress.json)
+│       ├── progress.py         # GET /api/runs/{id}/progress    (reads /data/results/<id>-progress.json)
+│       └── config.py           # GET /api/runs/{id}/config      (reads /data/results/<id>-config.json, serves as YAML text)
 │
 ├── ui/                         # Frontend (React + TypeScript + PatternFly 5; built to ui/dist/)
 │   ├── src/
@@ -95,9 +99,10 @@ kratos/
 │   │       ├── RunTrigger.tsx      # Config override editor (pre-filled from YAML defaults) + launch modal
 │   │       ├── LogStream.tsx       # REST poll consumer (1s interval), smart scroll, "N new lines" badge
 │   │       ├── AssertionPanel.tsx  # Live assertion cards (Passing/Failing/Pending) with value + expression
-│   │       ├── TaskProgress.tsx    # Horizontal task pipeline chips (PENDING/RUNNING/DONE/FAIL) with progress bars
-│   │       ├── RunHistory.tsx      # PatternFly Table of past runs; color-coded status badges; 3s poll while active
-│   │       └── RunDetail.tsx       # Per-run detail page: metadata bar, task pipeline, logs + assertions grid
+│   │       ├── TaskProgress.tsx    # Horizontal task pipeline chips (PENDING/RUNNING/DONE/FAIL/CANCELLED) with progress bars + live/frozen duration
+│   │       ├── RunHistory.tsx      # PatternFly Table of past runs; color-coded status badges; Duration column; Stop action; 3s poll while active
+│   │       ├── RunDetail.tsx       # Per-run detail page: metadata bar (live elapsed time, View Settings, Stop), task pipeline, logs + assertions grid
+│   │       └── RunSettingsModal.tsx # Modal showing a run's fully-resolved settings as YAML (GET /api/runs/{id}/config)
 │   ├── package.json
 │   └── tsconfig.json
 │
@@ -225,10 +230,11 @@ cleanup: automatic
 - Run is PASS only if all assertions pass (or no assertions defined)
 
 ### Results Storage
-- SQLite on PVC at `/data/kratos.db` (tables: `runs`, `task_results`; `runs` has a `config_overrides TEXT` column)
-- Run results JSON: `/data/results/<run-id>.json`
+- SQLite on PVC at `/data/kratos.db` (tables: `runs`, `task_results`; `runs` has `config_overrides TEXT` and `duration_ms REAL` columns — `task_results` is unused dead schema, per-task data lives in the progress JSON instead)
+- Run results JSON: `/data/results/<run-id>.json` — includes `RunResult.duration_ms` (total run time, `time.monotonic()`-based) and each task's `duration_ms`; `status` can be `PASS`/`FAIL`/`CANCELLED`
 - Live assertion state: `/data/results/<run-id>-assertions.json` — written by `emit_assertion_state()`, served by `GET /api/runs/{id}/assertions`
-- Live task progress: `/data/results/<run-id>-progress.json` — written by `_write_progress()` at task start/end and on each `emit()`, served by `GET /api/runs/{id}/progress`
+- Live task progress: `/data/results/<run-id>-progress.json` — written by `_write_progress()` at task start/end and on each `emit()`, served by `GET /api/runs/{id}/progress`. Includes a top-level `run_started_at` (wall-clock ISO timestamp) and, per task, `duration_ms` once completed or `started_at` while `RUNNING` — the frontend computes/ticks elapsed time client-side from these rather than the backend pushing a live-updating number.
+- Run config snapshot: `/data/results/<run-id>-config.json` — a **scenario-YAML-shaped** snapshot (`name`/`description`/`config`/`metrics_queries`/`tasks`/`assertions`/`cleanup`, built by `_scenario_settings_snapshot()`), meant to be pasted directly into a new `scenarios/*.yaml` file to reproduce the run exactly, not just inspected. `config:` merges the scenario's own declared keys (defaults + any launch-time overrides actually applied) with a small curated set of cluster-level settings (`MAAS_API_URL`, `MAAS_METRICS_URL`, `DEFAULT_MODEL`, `DEFAULT_SUBSCRIPTION`) — deliberately narrower than the raw `_resolved_config` (which is a merge of the *entire* process environment, per `harness/config.py:load_scenario`) so container plumbing (`PATH`, `HOSTNAME`, `KUBERNETES_*`, ...) never shows up. Any dict key matching `(^|_)(token|secret|password)($|_)` at *any* nesting depth (top-level config, or inside a task's resolved `params`) is redacted to `***REDACTED***` — deliberately excludes "key" as a bare substring, since this app's whole domain is provisioning MaaS API *keys* and that false-positived hard on entirely non-sensitive fields (`key_name`, `key_pool`, `total_tokens`, `maas_tokens_match` — the last one being a whole assertion, not just a leaf value, confirmed live). Written once, before the task loop starts (`ScenarioRunner.run()`), so it's viewable from the moment a run begins — served as YAML text (`sort_keys=False`, preserving scenario-file key order) by `GET /api/runs/{id}/config`.
 - Pod logs: `/data/logs/<run-id>.log` (final) or `.log.tmp` (in-progress) — see Log Streaming below
 
 ### Log Streaming (REST polling — no SSE)
@@ -250,9 +256,21 @@ Current approach:
 - **Metrics pipeline data is not cleaned up.** MaaS metrics polling is read-only; any request traces or counters written to the RHOAI metrics pipeline during a run are intentionally left in place. Cleaning up historical metrics data is deferred to future work.
 - Primary cleanup targets: MaaS API keys (bulk-revoked via `/maas-api/v1/api-keys/bulk-revoke`) and `MaaSSubscription` CRs (restored or deleted via Kubernetes API)
 
+### Stopping a Run (graceful)
+
+`POST /api/runs/{id}/stop` asks a run to stop — not a raw kill, since the harness has task cleanup (MaaS API key revocation, `MaaSSubscription` CR restoration) that must still run.
+
+- `api/k8s.py:stop_run(run_id)` finds the run's pod by its existing `kratos-run-id={run_id}` label and calls `core.delete_namespaced_pod(..., grace_period_seconds=_STOP_GRACE_PERIOD_S)` — the same mechanism `kubectl delete pod --grace-period=N` uses. It deletes the **pod**, not the Job — deleting the Job instead would race the pod's own graceful shutdown and confuse `_capture_logs`/`_sync_completed_runs`, both of which key off the pod's phase. `_STOP_GRACE_PERIOD_S` defaults to 120s (`KRATOS_STOP_GRACE_PERIOD_S` env override), well above Kubernetes' 30s default, sized for worst-case cleanup (sequential key revocation, subscription restore); `create_job()` sets this as the pod's `terminationGracePeriodSeconds`.
+- `harness/main.py` registers a `SIGTERM` handler (`loop.add_signal_handler`) that sets an `asyncio.Event`, passed into `ScenarioRunner(..., stop_event=...)`. Without this, the harness has no signal handling at all and a SIGTERM would just kill the process outright, skipping cleanup entirely.
+- Inside `ScenarioRunner.run()`: the task loop checks the event before starting each task; the in-flight `task.run(ctx)` itself is raced against the event via `asyncio.wait(..., return_when=FIRST_COMPLETED)` and cancelled if the stop wins, producing a `TaskResult(status="CANCELLED", error="run stopped by user")`; `_settle_and_evaluate`'s poll-sleep and the background metrics poller's sleep both use a small `_interruptible_sleep` helper so a stop wakes them immediately instead of waiting out the interval. The existing `for task in reversed(tasks): await task.cleanup(ctx)` block runs completely unchanged regardless of *why* the loop exited — cleanup already just reads whatever's in `shared_state` at that point (e.g. however many keys were provisioned before cancellation).
+- Final `RunResult.status` is `"CANCELLED"` whenever the stop event ends up set, checked once at the very end of `run()` rather than threaded through every early-return path.
+- The `POST /api/runs/{id}/stop` route itself does **not** write the DB row when a pod exists (`stop_run` returns `True`) — it relies on the existing `_sync_completed_runs` poller (`api/main.py`) picking up the harness's own final `"CANCELLED"` status from the result JSON on its normal 10s cadence, avoiding a race between the endpoint and the poller. It's a 404 if the run doesn't exist, a 409 if it's already terminal (not `PENDING`/`RUNNING`). Only the no-pod-yet (`PENDING`) case is finalized synchronously by the route, since there's no harness process there to ever self-report.
+- **Known gap, matching existing crash behavior**: if cleanup overruns the grace period and the container is `SIGKILL`ed, the pod still reaches a terminal phase (so `_capture_logs` still terminates correctly), but `harness/main.py` never gets to write the final result JSON — the run stays `RUNNING` in the DB forever. This is the same pre-existing gap as any other ungraceful crash (e.g. OOMKill), not something specific to stop; no safety-net timeout was added for it.
+
 ### SA Permissions Required
 - `rhoai-admin` ClusterRole (or equivalent) — to call MaaS API
-- `create`, `get`, `list`, `watch` on `jobs` and `pods` in the harness namespace
+- `create`, `get`, `list`, `watch`, `delete` on `jobs` in the harness namespace
+- `get`, `list`, `watch`, `delete` on `pods` — `delete` is for `POST /api/runs/{id}/stop` (`api/k8s.py:stop_run`, deletes the run's *pod* with a grace period rather than the Job, so `_capture_logs`/`_sync_completed_runs`'s existing pod-phase-based completion detection keeps working unchanged)
 - `get` on `pods/log`
 - `get`, `create`, `patch`, `delete` on `maassubscriptions` (`maas.opendatahub.io/v1alpha1`) — for `rate_limit_validation` scenario
 - `cluster-monitoring-view` ClusterRole binding (`deploy/rbac-monitoring.yaml`, cluster-scoped — the only cluster-scoped grant the SA needs beyond its own namespace) — for querying Thanos Querier (background MaaS metrics polling)
@@ -355,4 +373,5 @@ See [`docs/project/implementation-plan.md`](docs/project/implementation-plan.md)
 3. **Local dev**: `make dev` — starts FastAPI dev server + Vite dev server; open browser, verify scenario list loads and assertion panel renders
 4. **Build**: `make build` — multi-stage Docker build (Node UI build → Python image)
 5. **End-to-end**: `make deploy` (`oc apply -k deploy/`) → open Route URL → pick scenario → edit config overrides in modal → start run → confirm task pipeline chips appear within ~2 s and update (RUNNING with progress bar → DONE green) → confirm logs stream and scroll smartly (scroll up to see "N new lines" badge) → confirm assertion panel updates independently → navigate away and back (browser back button should work via URL hash) → verify results in history → verify no leftover `kratos-*` MaaS API keys → verify `MaaSSubscription` CR state restored after `rate_limit_validation`
-6. **MaaS metrics cross-check specifically**: run `metrics_fill` (needs `MAAS_METRICS_URL` set and `deploy/rbac-monitoring.yaml` applied — the scenario's own `metrics_queries:` block supplies the PromQL) → confirm `maas_requests_match`/`maas_tokens_match` go PASSING, not just `error_rate_pct` — these only appear on `metrics_fill`'s run page, not on other scenarios' (they aren't in those scenarios' `assertions:` blocks) — while settling, `send_requests`'s progress bar should stay visible the whole time rather than disappearing and popping back at the end. Confirmed working end-to-end on `cluster-rkmhx.rkmhx.sandbox1230.opentlc.com` prior to the ADR-015 migration to self-contained `promql`-form assertions — re-verify live after that change, since `clamp_min`/`bool` usage in the new query text hasn't been checked against a real Thanos Querier yet.
+6. **MaaS metrics cross-check specifically**: run `metrics_fill` (needs `MAAS_METRICS_URL` set and `deploy/rbac-monitoring.yaml` applied — the scenario's own `metrics_queries:` block supplies the PromQL) → confirm `maas_requests_match`/`maas_tokens_match` go PASSING, not just `error_rate_pct` — these only appear on `metrics_fill`'s run page, not on other scenarios' (they aren't in those scenarios' `assertions:` blocks) — while settling, `send_requests`'s progress bar should stay visible the whole time rather than disappearing and popping back at the end. The `clamp_min(vector(...), 1)` fix has been confirmed valid against a live Thanos Querier directly (`cluster-rkmhx.rkmhx.sandbox1230.opentlc.com`) but not yet re-verified via an actual end-to-end scenario run.
+7. **Runtime display / view settings / stop, specifically**: start a `single_key_load` run with a large `request_count` → confirm total and per-task elapsed time visibly tick up once a second in the UI while `RUNNING`, and freeze to a sensible final value once the run completes (matching `RunHistory`'s Duration column) → click "View Settings" mid-run and confirm the YAML shown matches what was actually configured, including any launch-modal edits, with no raw secrets/tokens visible (should show `***REDACTED***`) → click "Stop" mid-run on a scenario that provisions API keys (e.g. `multi_key_load`) → confirm the run reaches `CANCELLED` (not stuck `RUNNING`, not `FAIL`) within `_STOP_GRACE_PERIOD_S`, and verify via the MaaS API / `oc` that no `kratos-*` keys were left behind (needs `deploy/rbac.yaml`'s `delete` verb on `pods` applied).

@@ -7,6 +7,11 @@ from pathlib import Path
 IMAGE = os.environ.get("KRATOS_IMAGE", "quay.io/wparker/kratos:latest")
 NAMESPACE = os.environ.get("NAMESPACE", "kratos")
 _GLOBAL_CM = "kratos-global-config"
+# How long a run's pod gets, after stop_run() asks it to stop, before Kubernetes
+# SIGKILLs it — must comfortably exceed worst-case cleanup time (sequential MaaS
+# API key revocation, MaaSSubscription CR restore). Generous default; the harness
+# itself typically finishes cleanup and exits well before this is ever reached.
+_STOP_GRACE_PERIOD_S = int(os.environ.get("KRATOS_STOP_GRACE_PERIOD_S", "120"))
 
 _DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 _LOGS_DIR = _DATA_DIR / "logs"
@@ -55,6 +60,7 @@ def create_job(scenario: str, run_id: str, config_overrides: dict | None = None)
         service_account_name="kratos",
         restart_policy="Never",
         node_name=node_name,
+        termination_grace_period_seconds=_STOP_GRACE_PERIOD_S,
         containers=[
             k8s.V1Container(
                 name="harness",
@@ -103,6 +109,34 @@ def create_job(scenario: str, run_id: str, config_overrides: dict | None = None)
     # Kick off log capture immediately so the thread is already waiting
     # for the pod by the time the user opens the run detail page.
     ensure_log_capture(run_id)
+
+
+def stop_run(run_id: str) -> bool:
+    """Ask a run's pod to stop gracefully. Returns False if no pod exists yet
+    (e.g. the run is still PENDING) — caller should finalize the DB row directly
+    in that case, since there's no harness process that will ever self-report.
+
+    Deletes the *pod* (with a grace period), not the Job — deleting the Job
+    instead was considered and rejected: it would race the pod's own graceful
+    shutdown and confuse both _capture_logs and _sync_completed_runs, which key
+    off the pod's phase, not the Job's. grace_period_seconds is exactly what
+    `kubectl delete pod --grace-period=N` uses: kubelet sends SIGTERM immediately
+    and SIGKILLs after N seconds if the container hasn't exited by then — see
+    harness/main.py's SIGTERM handler, which is what actually makes this graceful.
+    """
+    k8s = _kube()
+    core = k8s.CoreV1Api()
+    pods = core.list_namespaced_pod(
+        namespace=NAMESPACE, label_selector=f"kratos-run-id={run_id}"
+    )
+    if not pods.items:
+        return False
+    core.delete_namespaced_pod(
+        name=pods.items[0].metadata.name,
+        namespace=NAMESPACE,
+        grace_period_seconds=_STOP_GRACE_PERIOD_S,
+    )
+    return True
 
 
 # ---------------------------------------------------------------------------
