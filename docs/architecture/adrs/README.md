@@ -29,3 +29,4 @@ Each ADR follows the [Michael Nygard format](https://cognitect.com/blog/2011/11/
 | [ADR-013](ADR-013-realtime-assertion-evaluation.md) | Real-time Assertion Evaluation During Run Execution | Accepted |
 | [ADR-014](ADR-014-maas-metrics-cross-validation.md) | MaaS Metrics Cross-Validation via Prometheus Baseline Delta | Accepted |
 | [ADR-015](ADR-015-promql-native-assertions.md) | PromQL-Native Assertions | Accepted |
+| [ADR-016](ADR-016-graceful-run-stop.md) | Graceful Run Stop via Pod Delete + SIGTERM Handler | Accepted |

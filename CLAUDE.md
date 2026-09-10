@@ -92,6 +92,7 @@ kratos/
 ├── ui/                         # Frontend (React + TypeScript + PatternFly 5; built to ui/dist/)
 │   ├── src/
 │   │   ├── App.tsx             # Top-level: URL hash routing (#run/<id>), pushState/popstate, Kratos masthead
+│   │   ├── monacoSetup.ts      # Self-hosted Monaco config (no CDN) + trimmed to YAML-only — see RunSettingsModal below
 │   │   ├── api/client.ts       # Typed fetch wrappers for all backend API routes
 │   │   ├── styles/theme.css    # Kratos/God of War dark theme: dark header, red accents, card styles
 │   │   └── components/
@@ -102,7 +103,7 @@ kratos/
 │   │       ├── TaskProgress.tsx    # Horizontal task pipeline chips (PENDING/RUNNING/DONE/FAIL/CANCELLED) with progress bars + live/frozen duration
 │   │       ├── RunHistory.tsx      # PatternFly Table of past runs; color-coded status badges; Duration column; Stop action; 3s poll while active
 │   │       ├── RunDetail.tsx       # Per-run detail page: metadata bar (live elapsed time, View Settings, Stop), task pipeline, logs + assertions grid
-│   │       └── RunSettingsModal.tsx # Modal showing a run's fully-resolved settings as YAML (GET /api/runs/{id}/config)
+│   │       └── RunSettingsModal.tsx # Read-only Monaco YAML view of a run's settings (GET /api/runs/{id}/config) — mirrors OpenShift console's own "View YAML"; lazy-loaded (React.lazy)
 │   ├── package.json
 │   └── tsconfig.json
 │
@@ -234,7 +235,7 @@ cleanup: automatic
 - Run results JSON: `/data/results/<run-id>.json` — includes `RunResult.duration_ms` (total run time, `time.monotonic()`-based) and each task's `duration_ms`; `status` can be `PASS`/`FAIL`/`CANCELLED`
 - Live assertion state: `/data/results/<run-id>-assertions.json` — written by `emit_assertion_state()`, served by `GET /api/runs/{id}/assertions`
 - Live task progress: `/data/results/<run-id>-progress.json` — written by `_write_progress()` at task start/end and on each `emit()`, served by `GET /api/runs/{id}/progress`. Includes a top-level `run_started_at` (wall-clock ISO timestamp) and, per task, `duration_ms` once completed or `started_at` while `RUNNING` — the frontend computes/ticks elapsed time client-side from these rather than the backend pushing a live-updating number.
-- Run config snapshot: `/data/results/<run-id>-config.json` — a **scenario-YAML-shaped** snapshot (`name`/`description`/`config`/`metrics_queries`/`tasks`/`assertions`/`cleanup`, built by `_scenario_settings_snapshot()`), meant to be pasted directly into a new `scenarios/*.yaml` file to reproduce the run exactly, not just inspected. `config:` merges the scenario's own declared keys (defaults + any launch-time overrides actually applied) with a small curated set of cluster-level settings (`MAAS_API_URL`, `MAAS_METRICS_URL`, `DEFAULT_MODEL`, `DEFAULT_SUBSCRIPTION`) — deliberately narrower than the raw `_resolved_config` (which is a merge of the *entire* process environment, per `harness/config.py:load_scenario`) so container plumbing (`PATH`, `HOSTNAME`, `KUBERNETES_*`, ...) never shows up. Any dict key matching `(^|_)(token|secret|password)($|_)` at *any* nesting depth (top-level config, or inside a task's resolved `params`) is redacted to `***REDACTED***` — deliberately excludes "key" as a bare substring, since this app's whole domain is provisioning MaaS API *keys* and that false-positived hard on entirely non-sensitive fields (`key_name`, `key_pool`, `total_tokens`, `maas_tokens_match` — the last one being a whole assertion, not just a leaf value, confirmed live). Written once, before the task loop starts (`ScenarioRunner.run()`), so it's viewable from the moment a run begins — served as YAML text (`sort_keys=False`, preserving scenario-file key order) by `GET /api/runs/{id}/config`.
+- Run config snapshot: `/data/results/<run-id>-config.json` — a **scenario-YAML-shaped** snapshot (`name`/`description`/`config`/`metrics_queries`/`tasks`/`assertions`/`cleanup`, built by `_scenario_settings_snapshot()`), meant to be pasted directly into a new `scenarios/*.yaml` file to reproduce the run exactly, not just inspected. `config:` merges the scenario's own declared keys (defaults + any launch-time overrides actually applied) with a small curated set of cluster-level settings (`MAAS_API_URL`, `MAAS_METRICS_URL`, `DEFAULT_MODEL`, `DEFAULT_SUBSCRIPTION`) — deliberately narrower than the raw `_resolved_config` (which is a merge of the *entire* process environment, per `harness/config.py:load_scenario`) so container plumbing (`PATH`, `HOSTNAME`, `KUBERNETES_*`, ...) never shows up. Any dict key matching `(^|_)(token|secret|password)($|_)` at *any* nesting depth (top-level config, or inside a task's resolved `params`) is redacted to `***REDACTED***` — deliberately excludes "key" as a bare substring, since this app's whole domain is provisioning MaaS API *keys* and that false-positived hard on entirely non-sensitive fields (`key_name`, `key_pool`, `total_tokens`, `maas_tokens_match` — the last one being a whole assertion, not just a leaf value, confirmed live). Written once, before the task loop starts (`ScenarioRunner.run()`), so it's viewable from the moment a run begins — served as YAML text (`sort_keys=False`, preserving scenario-file key order) by `GET /api/runs/{id}/config`. Rendered in the UI (`RunSettingsModal.tsx`) via PatternFly's `CodeEditor` (Monaco) in read-only mode — the same component family OpenShift console itself uses for "View YAML" — with built-in copy/download buttons, YAML syntax highlighting, and line numbers, so the output can be copied straight into a new scenario file. See Frontend Monaco Setup below for why it's self-hosted rather than CDN-loaded.
 - Pod logs: `/data/logs/<run-id>.log` (final) or `.log.tmp` (in-progress) — see Log Streaming below
 
 ### Log Streaming (REST polling — no SSE)
@@ -257,6 +258,8 @@ Current approach:
 - Primary cleanup targets: MaaS API keys (bulk-revoked via `/maas-api/v1/api-keys/bulk-revoke`) and `MaaSSubscription` CRs (restored or deleted via Kubernetes API)
 
 ### Stopping a Run (graceful)
+
+See ADR-016 for the full reasoning behind pod-delete-with-grace-period vs. Job-delete vs. `exec`, and why the harness-side signal handler defers to the existing task loop/cleanup rather than a fast-path.
 
 `POST /api/runs/{id}/stop` asks a run to stop — not a raw kill, since the harness has task cleanup (MaaS API key revocation, `MaaSSubscription` CR restoration) that must still run.
 
@@ -320,13 +323,22 @@ The `check_maas_metrics` task class still exists and can be added to a scenario'
 ### Task Progress UI
 
 The run detail page shows a horizontal **task pipeline** above the logs. Each chip displays:
-- Status icon: `○` PENDING | CSS spinner RUNNING | `✓` DONE | `✗` FAIL
+- Status icon: `○` PENDING | CSS spinner RUNNING | `✓` DONE | `✗` FAIL | `⊘` CANCELLED (a task interrupted mid-run by a graceful stop, see Stopping a Run above)
 - Task name (snake_case → Title Case)
-- A mini progress bar + `{current} / {total}` label when the task reports `shared_state["task_progress"]` — visible during RUNNING (including while a task's per-task assertions are settling, see Background Metrics Polling above) and preserved on completion (at 100% for DONE, actual for FAIL)
+- A mini progress bar + `{current} / {total}` label when the task reports `shared_state["task_progress"]` — visible during RUNNING (including while a task's per-task assertions are settling, see Background Metrics Polling above) and preserved on completion (at 100% for DONE, actual for FAIL/CANCELLED)
+- A duration readout — ticks live (client-side, off the task's `started_at`) while RUNNING, frozen to `duration_ms` once completed
 
-Chip background colours: grey (PENDING), blue tint (RUNNING), green (DONE), red (FAIL).
+Chip background colours: grey (PENDING), blue tint (RUNNING), green (DONE), red (FAIL), amber (CANCELLED).
 
 The `TaskProgress` component polls `GET /api/runs/{id}/progress` every 2 s, managing its own interval independently of logs and assertions.
+
+### Frontend Monaco Setup
+
+`RunSettingsModal.tsx`'s read-only YAML view (see Results Storage above) is the only place this app uses Monaco. Two deliberate choices in `ui/src/monacoSetup.ts`, both because this app otherwise bundles everything into the container image and avoids external runtime dependencies (no CDN usage anywhere else in the UI, static files served straight from the FastAPI backend per the Dockerfile):
+- **Self-hosted, not CDN-loaded.** `@monaco-editor/react` defaults to lazy-fetching Monaco's AMD bundle from a public CDN at runtime — a real risk for an app meant to run inside OpenShift clusters that may have restricted egress. `monacoSetup.ts` imports `monaco-editor` directly and points `@monaco-editor/react`'s `loader.config({ monaco })` at it instead, plus configures `self.MonacoEnvironment.getWorker` to use a Vite-bundled worker (`monaco-editor/editor/editor.worker.js?worker`) rather than one Monaco would otherwise fetch itself.
+- **Trimmed to YAML only.** Importing the full `monaco-editor` package entry pulls in tokenizers for every one of its ~80 bundled languages (pushed the lazy chunk over 4MB) when this app only ever displays YAML. `monacoSetup.ts` instead imports the slim core (`monaco-editor/editor/editor.api.js`) plus just the YAML language definition (`monaco-editor/languages/definitions/yaml/register.js`) — both resolved through `monaco-editor`'s package.json `exports` map, which already implies the `esm/vs/` path prefix (a doubled-prefix import path is a common mistake here and fails silently/confusingly at Rollup build time, not at dev time).
+- `RunSettingsModal` itself is loaded via `React.lazy()` from `RunDetail.tsx` (not a static import) so Monaco's bundle is only fetched when a user actually opens the settings modal, not on every run page view.
+- `ui/tsconfig.json` needs `"types": ["vite/client"]` for the `?worker` import's types to resolve — absent from the original tsconfig since nothing else in the app used Vite's special import suffixes.
 
 ## Scenarios (v1)
 

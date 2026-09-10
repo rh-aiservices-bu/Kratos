@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Button, CodeBlock, CodeBlockCode, Modal, Spinner } from '@patternfly/react-core';
+import { Button, Modal, Spinner } from '@patternfly/react-core';
+import { CodeEditor, Language } from '@patternfly/react-code-editor';
+import '../monacoSetup';
 import { getRunConfig } from '../api/client';
 
 interface Props {
@@ -31,7 +33,7 @@ export function RunSettingsModal({ runId, onClose }: Props) {
       onClose={onClose}
       aria-label="Run settings"
       title="Run Settings"
-      variant="medium"
+      variant="large"
       actions={[
         <Button key="close" variant="link" onClick={onClose}>
           Close
@@ -41,9 +43,22 @@ export function RunSettingsModal({ runId, onClose }: Props) {
       {loading ? (
         <Spinner size="md" aria-label="Loading settings" />
       ) : yamlText ? (
-        <CodeBlock>
-          <CodeBlockCode>{yamlText}</CodeBlockCode>
-        </CodeBlock>
+        // Mirrors OpenShift console's own "View YAML" — same underlying
+        // component family (PatternFly CodeEditor / Monaco), read-only here
+        // since this is a record of what already ran, not an editable form.
+        <CodeEditor
+          isReadOnly
+          isDarkTheme
+          isCopyEnabled
+          isDownloadEnabled
+          isLineNumbersVisible
+          language={Language.yaml}
+          code={yamlText}
+          height="480px"
+          downloadFileName={`${runId}.yaml`}
+          copyButtonToolTipText="Copy YAML"
+          copyButtonSuccessTooltipText="Copied!"
+        />
       ) : (
         <p style={{ color: '#888', fontStyle: 'italic' }}>
           Settings aren't available yet — the run may not have started.

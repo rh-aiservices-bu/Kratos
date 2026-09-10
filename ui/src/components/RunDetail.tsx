@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Button, Grid, GridItem, Page, PageSection, Spinner } from '@patternfly/react-core';
 import { AssertionPanel } from './AssertionPanel';
 import { LogStream } from './LogStream';
-import { RunSettingsModal } from './RunSettingsModal';
 import { TaskProgress } from './TaskProgress';
 import {
   getAssertions,
@@ -15,6 +14,12 @@ import {
 } from '../api/client';
 
 const ACTIVE_STATUSES = new Set(['PENDING', 'RUNNING']);
+
+// Code-split: RunSettingsModal pulls in Monaco (self-hosted, see monacoSetup.ts),
+// a sizeable bundle not worth loading for every run view when most never open it.
+const RunSettingsModal = lazy(() =>
+  import('./RunSettingsModal').then((m) => ({ default: m.RunSettingsModal }))
+);
 
 function formatScenarioName(name: string): string {
   return name.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
@@ -198,7 +203,9 @@ export function RunDetail({ runId, onBack }: Props) {
       </PageSection>
 
       {showSettings && (
-        <RunSettingsModal runId={runId} onClose={() => setShowSettings(false)} />
+        <Suspense fallback={<Spinner size="lg" aria-label="Loading editor" />}>
+          <RunSettingsModal runId={runId} onClose={() => setShowSettings(false)} />
+        </Suspense>
       )}
     </Page>
   );
