@@ -66,6 +66,7 @@ data:
     config:
       target_url: ""
       target_token: ""
+      target_model: ""
       request_count: 50
       concurrency: 5
       prompt: "Hello, world!"
@@ -74,6 +75,7 @@ data:
         params:
           url: "${config.target_url}"
           token: "${config.target_token}"
+          model: "${config.target_model}"
           count: "${config.request_count}"
           concurrency: "${config.concurrency}"
           prompt: "${config.prompt}"
@@ -165,12 +167,17 @@ data:
           # delta match what we actually sent, within tolerance" check is one expression
           # evaluated by Prometheus itself, using <bool> to fold the comparison into 0/1.
           maas_requests_match:
+            # clamp_min(v instant-vector, min scalar) requires its first argument to be
+            # an instant vector — ${harness.x} substitutes to a bare number (scalar),
+            # which Thanos rejects with a 400 ("expected type instant vector... got
+            # scalar", confirmed live). vector(...) converts the scalar into a
+            # (labelless) instant vector first, which clamp_min then accepts.
             promql: >-
               abs(
                 (sum(authorized_calls{limitador_namespace="${config.limitador_namespace}"}) - ${baseline.total_requests})
                 - ${harness.inference_results.total_requests}
               )
-              <= bool (${config.metrics_tolerance_pct} / 100 * clamp_min(${harness.inference_results.total_requests}, 1))
+              <= bool (${config.metrics_tolerance_pct} / 100 * clamp_min(vector(${harness.inference_results.total_requests}), 1))
             expect: "== 1"
             max_wait_s: "${config.metrics_max_wait_s}"
           maas_tokens_match:
@@ -179,7 +186,7 @@ data:
                 (sum(authorized_hits{limitador_namespace="${config.limitador_namespace}"}) - ${baseline.total_tokens})
                 - ${harness.inference_results.total_tokens_sent}
               )
-              <= bool (${config.metrics_tolerance_pct} / 100 * clamp_min(${harness.inference_results.total_tokens_sent}, 1))
+              <= bool (${config.metrics_tolerance_pct} / 100 * clamp_min(vector(${harness.inference_results.total_tokens_sent}), 1))
             expect: "== 1"
             max_wait_s: "${config.metrics_max_wait_s}"
     cleanup: automatic

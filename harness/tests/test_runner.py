@@ -534,18 +534,41 @@ def test_substitute_baseline_vars_unit() -> None:
     from harness.runner import _substitute_baseline_vars
 
     assert (
-        _substitute_baseline_vars("sum(foo) - ${baseline.total_requests}", {"total_requests": 10.0})
+        _substitute_baseline_vars(
+            "sum(foo) - ${baseline.total_requests}", {"total_requests": 10.0}, {"total_requests"}
+        )
         == "sum(foo) - 10.0"
     )
     # A template with no ${baseline.x} at all is returned unchanged.
-    assert _substitute_baseline_vars("sum(foo)", {}) == "sum(foo)"
+    assert _substitute_baseline_vars("sum(foo)", {}, set()) == "sum(foo)"
 
 
-def test_substitute_baseline_vars_raises_on_unknown_name() -> None:
+def test_substitute_baseline_vars_raises_on_undeclared_name() -> None:
+    """Referencing a name never declared in metrics_queries at all is a genuine
+    authoring mistake (a typo) — this should still fail loudly at scenario start."""
     from harness.runner import _substitute_baseline_vars
 
-    with pytest.raises(KeyError, match="total_requests"):
-        _substitute_baseline_vars("sum(foo) - ${baseline.total_requests}", {})
+    with pytest.raises(KeyError, match="not declared"):
+        _substitute_baseline_vars("sum(foo) - ${baseline.total_requests}", {}, set())
+
+
+def test_substitute_baseline_vars_returns_none_when_declared_but_no_data(
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """A declared query whose baseline fetch came back empty (e.g. a label filter
+    that matches nothing on this cluster) must NOT crash the whole run — it should
+    degrade to None (permanently PENDING for this run) with a diagnostic printed,
+    the same way every other 'metric not populated yet' case in this codebase does.
+    """
+    from harness.runner import _substitute_baseline_vars
+
+    resolved = _substitute_baseline_vars(
+        "sum(foo) - ${baseline.total_requests}", {}, {"total_requests"}
+    )
+    assert resolved is None
+    out = capsys.readouterr().out
+    assert "total_requests" in out
+    assert "no data at scenario start" in out
 
 
 def test_substitute_harness_vars_unit() -> None:
@@ -633,6 +656,66 @@ def test_promql_assertion_resolves_baseline_and_harness_templates_end_to_end(
         )
     finally:
         REGISTRY.pop("_promql_template_task", None)
+
+
+def test_baseline_query_returning_no_data_does_not_crash_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test for a real reported bug: a declared metrics_queries entry
+    whose baseline fetch comes back empty (e.g. a limitador_namespace label filter
+    that doesn't match anything on this cluster) must not raise out of the whole
+    run before a single task executes — the run should complete normally, with only
+    the assertion referencing that baseline value stuck PENDING.
+    """
+    from harness import runner as runner_module
+
+    async def fake_fetch_metrics(base_url: str, queries: dict, token: str) -> dict:
+        # total_requests never resolves — simulating a label filter that matches no
+        # series on this cluster. Any other query (like the harness pass-through
+        # error_rate_pct assertion) succeeds normally, same as real behavior where
+        # only the mismatched query comes back empty.
+        return {"error_rate_pct": 1.0} if "error_rate_pct" in queries else {}
+
+    monkeypatch.setattr(runner_module, "fetch_metrics", fake_fetch_metrics)
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_MAX_WAIT_S", 0.05)
+    monkeypatch.setattr(runner_module, "_METRICS_FINAL_POLL_INTERVAL_S", 0.01)
+
+    class _SendLikeTask(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            ctx.shared_state["inference_results"] = {"error_rate_pct": 1.0}
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            pass
+
+    REGISTRY["_no_baseline_data_task"] = _SendLikeTask
+
+    try:
+        path = _write(tmp_path, """
+            name: test_baseline_no_data
+            config:
+              MAAS_METRICS_URL: "http://thanos.test/api/v1/query"
+            metrics_queries:
+              total_requests: "sum(foo)"
+            tasks:
+              - name: _no_baseline_data_task
+                params: {}
+            assertions:
+              maas_requests_match:
+                promql: "sum(foo) - ${baseline.total_requests}"
+                expect: "== 0"
+              error_rate_pct:
+                promql: "${harness.inference_results.error_rate_pct}"
+                expect: "< 5"
+        """)
+        result = asyncio.run(ScenarioRunner(path, "baseline-no-data-001").run())
+
+        assert result.status == "PASS"
+        assertions = {a.name: a for a in result.assertions}
+        assert assertions["maas_requests_match"].status == "PENDING"
+        assert assertions["error_rate_pct"].status == "PASSING"
+    finally:
+        REGISTRY.pop("_no_baseline_data_task", None)
 
 
 def test_unknown_task_raises(tmp_path: Path) -> None:

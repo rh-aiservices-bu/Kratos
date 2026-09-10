@@ -100,23 +100,54 @@ def _collect_promql_assertions(assertions: dict, task_defs: list[dict]) -> dict[
     return collected
 
 
-def _substitute_baseline_vars(template: str, baseline: dict[str, float]) -> str:
+def _substitute_baseline_vars(
+    template: str, baseline: dict[str, float], declared: set[str]
+) -> str | None:
     """Resolve ${baseline.<name>} references against the pre-run metrics snapshot.
 
     Runs once, right after the baseline fetch — unlike ${harness.*}, baseline values
     never change during a run, so there's no need to re-resolve them on every tick.
+
+    Two distinct failure modes here, handled differently on purpose:
+    - ${baseline.<name>} where <name> isn't declared in this scenario's
+      metrics_queries at all is an authoring mistake (a typo, or a forgotten
+      metrics_queries entry) — raises immediately, loud, at scenario start, the same
+      way a bad ${config.x} reference already does.
+    - <name> IS declared, but its baseline fetch came back with no data — e.g. a
+      label filter (like limitador_namespace) that doesn't match any series on this
+      cluster. That's an expected-to-happen environmental/config condition, not a
+      code bug, and must not crash the entire run before a single task executes (as
+      it did previously) — every other "metric not populated yet" case in this
+      codebase degrades to PENDING instead, so this does too: returns None, telling
+      the caller to permanently skip firing this assertion's query (the baseline
+      never gets re-fetched), and logs why so it's diagnosable instead of silent.
     """
+    unresolved: set[str] = set()
 
     def _sub(m: re.Match) -> str:
         key = m.group(1)
-        if key not in baseline:
+        if key not in declared:
             raise KeyError(
-                f"${{baseline.{key}}} referenced but {key!r} is not one of this "
-                f"scenario's metrics_queries: {sorted(baseline)}"
+                f"${{baseline.{key}}} referenced but {key!r} is not declared in "
+                f"this scenario's metrics_queries: {sorted(declared)}"
             )
+        if key not in baseline:
+            unresolved.add(key)
+            return ""
         return str(float(baseline[key]))
 
-    return _BASELINE_VAR_RE.sub(_sub, template)
+    resolved = _BASELINE_VAR_RE.sub(_sub, template)
+    if unresolved:
+        print(
+            f"[runner] baseline metrics {sorted(unresolved)} returned no data at "
+            "scenario start (check the query's label filters against what's "
+            "actually live on this cluster, e.g. via /api/v1/series) — any "
+            "assertion referencing ${baseline." + next(iter(unresolved)) + "} will "
+            "stay PENDING for this run",
+            flush=True,
+        )
+        return None
+    return resolved
 
 
 def _substitute_harness_vars(template: str, shared_state: dict) -> str | None:
@@ -250,7 +281,10 @@ class ScenarioRunner:
         # re-resolved every poll tick in _fetch_metrics_once, since those values
         # change continuously during the run.
         promql_templates: dict[str, str] = _collect_promql_assertions(assertions, task_defs)
-        promql_after_baseline: dict[str, str] = dict(promql_templates)
+        # None here means the template's ${baseline.x} reference is declared but came
+        # back with no data (see _substitute_baseline_vars) — permanently un-firable
+        # for this run, so the assertion just stays PENDING rather than crashing it.
+        promql_after_baseline: dict[str, str | None] = dict(promql_templates)
         metrics_enabled = bool(metrics_url and (metrics_queries or promql_templates))
 
         async def _fetch_metrics_once() -> None:
@@ -258,6 +292,8 @@ class ScenarioRunner:
                 return
             resolved_assertion_queries: dict[str, str] = {}
             for name, tmpl in promql_after_baseline.items():
+                if tmpl is None:
+                    continue
                 resolved = _substitute_harness_vars(tmpl, shared_state)
                 if resolved is not None:
                     resolved_assertion_queries[name] = resolved
@@ -335,7 +371,7 @@ class ScenarioRunner:
             if baseline:
                 shared_state["metrics_baseline"] = baseline
             promql_after_baseline = {
-                name: _substitute_baseline_vars(tmpl, baseline or {})
+                name: _substitute_baseline_vars(tmpl, baseline or {}, set(metrics_queries))
                 for name, tmpl in promql_templates.items()
             }
             metrics_bg = asyncio.create_task(_metrics_bg())
