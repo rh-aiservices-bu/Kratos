@@ -56,6 +56,7 @@ kratos/
 │   ├── runner.py               # ScenarioRunner: executes tasks, records results
 │   ├── result.py               # RunResult dataclass + assertion evaluation
 │   ├── config.py               # Config loader: merges global ConfigMap + scenario YAML
+│   ├── metrics_client.py       # fetch_metrics/parse_queries: shared Thanos Querier client (background poller + check_maas_metrics both use this)
 │   └── tasks/
 │       ├── __init__.py
 │       ├── base.py             # Task ABC: run(ctx) -> TaskResult, cleanup(ctx) -> None
@@ -103,6 +104,7 @@ kratos/
 ├── deploy/                     # OpenShift/K8s manifests
 │   ├── serviceaccount.yaml     # SA with rhoai-admin + job/pod + maassubscriptions RBAC
 │   ├── rbac.yaml               # Role + RoleBinding
+│   ├── rbac-monitoring.yaml    # ClusterRoleBinding: SA -> cluster-monitoring-view (Thanos Querier access)
 │   ├── pvc.yaml                # PVC for SQLite DB + run results
 │   ├── configmap-global.yaml   # Global cluster config (MAAS_API_URL, etc.)
 │   ├── configmap-scenarios.yaml# Scenario YAML files
@@ -112,7 +114,9 @@ kratos/
 │   └── kustomization.yaml      # oc apply -k deploy/
 │
 ├── docs/
-│   ├── architecture/adrs/      # Architecture Decision Records (ADR-001 to ADR-013)
+│   ├── architecture/
+│   │   ├── adrs/                          # Architecture Decision Records (ADR-001 to ADR-014)
+│   │   └── maas-metrics-reference.md      # Full catalog of MaaS/RHOAI metrics found during live-cluster research (maas-api, Limitador, vLLM, Istio, Authorino) — not just the two Kratos uses
 │   └── project/
 │       └── implementation-plan.md  # Phased implementation plan
 │
@@ -237,6 +241,7 @@ Current approach:
 - `create`, `get`, `list`, `watch` on `jobs` and `pods` in the harness namespace
 - `get` on `pods/log`
 - `get`, `create`, `patch`, `delete` on `maassubscriptions` (`maas.opendatahub.io/v1alpha1`) — for `rate_limit_validation` scenario
+- `cluster-monitoring-view` ClusterRole binding (`deploy/rbac-monitoring.yaml`, cluster-scoped — the only cluster-scoped grant the SA needs beyond its own namespace) — for querying Thanos Querier (background MaaS metrics polling)
 
 ## Task Reference
 
@@ -250,11 +255,11 @@ Current approach:
 
 ### Background Metrics Polling
 
-MaaS/RHOAI metrics are read from Prometheus/Thanos Querier's instant-query API (`GET {MAAS_METRICS_URL}?query=<promql>`), not a MaaS-specific REST endpoint — see ADR-014 for why, and the SA RBAC (`deploy/rbac-monitoring.yaml`, `cluster-monitoring-view`) this requires. `MAAS_METRICS_QUERIES` (a JSON dict of `{name: promql}` in the global ConfigMap) names which PromQL queries to run; both it and `MAAS_METRICS_URL` are TBD until confirmed on a live cluster (see the metrics research checklist in `docs/project/implementation-plan.md`) — the poller and `check_maas_metrics` task both no-op until they're set.
+MaaS/RHOAI metrics are read from Prometheus/Thanos Querier's instant-query API (`GET {MAAS_METRICS_URL}?query=<promql>`), not a MaaS-specific REST endpoint — see ADR-014 for why, and the SA RBAC (`deploy/rbac-monitoring.yaml`, `cluster-monitoring-view`) this requires. `MAAS_METRICS_QUERIES` (a JSON dict of `{name: promql}` in the global ConfigMap) names which PromQL queries to run. Confirmed and wired for the cluster this repo targets (`cluster-rkmhx.rkmhx.sandbox1230.opentlc.com`): Kuadrant/Limitador's gateway counters `authorized_calls` (total_requests) and `authorized_hits` (total_tokens — weighted per-token via the model's `TokenRateLimitPolicy`), both scoped by the `limitador_namespace` label (the target model's HTTPRoute name). See `docs/architecture/maas-metrics-reference.md` for the full catalog of every metric-emitting component found (not just these two) and ADR-014 for the decision. If deploying to a different cluster/model, re-verify these against a live `/api/v1/series` query rather than assuming — metric names/labels are confirmed to vary across Limitador deployments.
 
 `ScenarioRunner.run()` takes one metrics snapshot immediately before the task loop starts and stores it as `shared_state["metrics_baseline"]`. It then starts an asyncio background task (`_metrics_bg`) that polls every 5 s, writes the raw current values into `shared_state["metrics"]`, computes `{name}_delta = current - baseline` for each metric present in both, and calls `emit()` to trigger an assertion re-evaluation. The delta — not the raw value — is what should be compared against harness-known sent counts, since the underlying Prometheus counter may be cumulative/scoped beyond a single run rather than zeroed per run.
 
-After the main task loop and cleanup complete, the background task is cancelled and one final definitive fetch is done before writing the final assertion state.
+After the main task loop and cleanup complete, the background task is cancelled and the runner fetches a **definitive final state with bounded retry**: it re-fetches every 5 s (up to a ~40 s cap) until at least one metric has moved past its baseline value, then evaluates. A single immediate fetch isn't enough — a scenario that finishes faster than Prometheus's scrape interval (commonly ~30 s) would otherwise read back an unchanged baseline (delta=0) even though the traffic really happened, which a tolerance-band comparison can't distinguish from "genuinely nothing changed" (confirmed by hitting this exact false-FAIL on a live run before adding the retry). A run that already took longer than one scrape interval typically exits the retry loop immediately, so this adds no wall-clock cost for slower scenarios.
 
 The `check_maas_metrics` task class still exists and can be added to a scenario's task list if an explicit final check with a log summary is wanted. Standard scenarios no longer include it.
 
@@ -277,7 +282,7 @@ The `TaskProgress` component polls `GET /api/runs/{id}/progress` every 2 s, mana
 | `multi_key_load` | provision_api_key × N → send_requests (M reqs distributed across key pool) → [cleanup: delete all N keys] | `key_count: 5`, `request_count: 5`, `concurrency: 5` | `error_rate_pct: "< 5"` | M requests distributed evenly across N keys (floor(M/N) per key, remainder to first). Default M=N so each key gets exactly 1 probe. |
 | `direct_inference` | send_requests (url=target_url, token=target_token) — no key provisioning, no cleanup | `target_url: ""` (required), `target_token: ""` (required), `request_count: 50`, `concurrency: 5` | `error_rate_pct: "< 5"` | Send inference directly to any configurable endpoint. Bypasses MaaS gateway — tests underlying model serving or compares MaaS-routed vs direct latency. |
 | `rate_limit_validation` | apply_rate_limit_subscription(rps_limit) → provision_api_key × N → send_requests → [cleanup: delete keys + restore/delete MaaSSubscription] | `rate_limit_rps: 10`, `request_count: 100`, `concurrency: 20`, `key_count: 1` | `throughput_rps: "<= ${config.rate_limit_rps}"`, `error_rate_pct: "< 30"` | Creates a `MaaSSubscription` CR with a configured rate limit. Fires requests and asserts observed throughput stays at or below the limit. Some 429s are expected. |
-| `metrics_fill` | provision_api_key → send_requests → [cleanup: delete key] | `request_count: 200`, `concurrency: 10` | `error_rate_pct: "< 5"`, `total_requests: ">= ${config.metrics_min_requests}"` | Sends a burst and validates that RHOAI/MaaS metrics counters match what was sent. `total_requests` assertion evaluates against background-polled MaaS metrics. |
+| `metrics_fill` | provision_api_key → send_requests → [cleanup: delete key] | `request_count: 200`, `concurrency: 10`, `metrics_tolerance_pct: 5` | `error_rate_pct: "< 5"`, `maas_requests_match` (metrics.total_requests_delta ≈ inference_results.total_requests), `maas_tokens_match` (metrics.total_tokens_delta ≈ inference_results.total_tokens_sent) | The canonical MaaS-vs-harness cross-check scenario (ADR-014) — sends a burst and asserts MaaS-reported request/token counts actually match what the harness sent, not just that they're non-zero. |
 
 **Design note**: Tasks are kept atomic and composable so future scenarios can reuse just `provision_api_key`, just `send_requests`, etc.
 
@@ -312,3 +317,4 @@ See [`docs/project/implementation-plan.md`](docs/project/implementation-plan.md)
 3. **Local dev**: `make dev` — starts FastAPI dev server + Vite dev server; open browser, verify scenario list loads and assertion panel renders
 4. **Build**: `make build` — multi-stage Docker build (Node UI build → Python image)
 5. **End-to-end**: `make deploy` (`oc apply -k deploy/`) → open Route URL → pick scenario → edit config overrides in modal → start run → confirm task pipeline chips appear within ~2 s and update (RUNNING with progress bar → DONE green) → confirm logs stream and scroll smartly (scroll up to see "N new lines" badge) → confirm assertion panel updates independently → navigate away and back (browser back button should work via URL hash) → verify results in history → verify no leftover `kratos-*` MaaS API keys → verify `MaaSSubscription` CR state restored after `rate_limit_validation`
+6. **MaaS metrics cross-check specifically**: run `metrics_fill` (needs `MAAS_METRICS_URL`/`MAAS_METRICS_QUERIES` set and `deploy/rbac-monitoring.yaml` applied) → confirm `maas_requests_match`/`maas_tokens_match` go PASSING, not just `error_rate_pct` — these only appear on `metrics_fill`'s run page, not on other scenarios' (they aren't in those scenarios' `assertions:` blocks). Confirmed working end-to-end on `cluster-rkmhx.rkmhx.sandbox1230.opentlc.com`.
