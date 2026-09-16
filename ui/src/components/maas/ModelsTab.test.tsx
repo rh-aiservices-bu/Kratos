@@ -87,7 +87,8 @@ test('shows unknown (not a false negative) when auth-policy/label state cannot b
 
   render(<ModelsTab />);
 
-  expect(await screen.findByText('Auth policy: unknown')).toBeInTheDocument();
+  expect(await screen.findByText('unknown')).toBeInTheDocument();
+  expect(await screen.findByText('gateway-access: unknown')).toBeInTheDocument();
   expect(screen.queryByText('⚠ missing gateway-access label')).not.toBeInTheDocument();
   expect(screen.queryByText('✓ gateway-access')).not.toBeInTheDocument();
 });

@@ -27,17 +27,45 @@ function SubscriptionChips({ subs }: { subs: MaasModel['subscriptions'] }) {
   );
 }
 
-// `null` means "couldn't tell" (the SA lacks RBAC for auth policies or the
-// namespace) — shown as a muted note, never collapsed into the "missing"
-// (false) case, which reads as an actual misconfiguration to fix.
+// `null` means "couldn't tell" (the SA lacks RBAC for auth policies) — shown
+// as a muted note, never collapsed into the "missing" (false) case, which
+// reads as an actual misconfiguration to fix. Its own column, not tucked
+// under Subscriptions — quota (subscriptions) and gateway access (auth
+// policy) are two different governance questions, per Catalog item B/C.
 function AuthPolicyBadge({ hasAuthPolicy }: { hasAuthPolicy: boolean | null }) {
   if (hasAuthPolicy === null) {
-    return <div style={{ fontSize: '0.72rem', color: '#888', marginTop: '0.3rem' }}>Auth policy: unknown</div>;
+    return <span style={{ fontSize: '0.75rem', color: '#888' }}>unknown</span>;
   }
   return (
-    <Label isCompact color={hasAuthPolicy ? 'green' : 'orange'} style={{ marginTop: '0.3rem' }}>
+    <Label isCompact color={hasAuthPolicy ? 'green' : 'orange'}>
       {hasAuthPolicy ? '✓ has auth policy' : '⚠ no auth policy'}
     </Label>
+  );
+}
+
+// The namespace and its `gateway-access` label are one fact (the label
+// lives ON the namespace), so they share a column — separate from Hosting,
+// which is about how the model itself is served.
+function NamespaceCell({ model }: { model: MaasModel }) {
+  return (
+    <div>
+      <div style={{ fontSize: '0.8rem', fontFamily: 'monospace', color: '#333' }}>
+        {model.namespace}
+      </div>
+      {model.gateway_access_label === false && (
+        <Label isCompact color="red" style={{ marginTop: '0.3rem' }}>
+          ⚠ missing gateway-access label
+        </Label>
+      )}
+      {model.gateway_access_label === true && (
+        <Label isCompact color="green" style={{ marginTop: '0.3rem' }}>
+          ✓ gateway-access
+        </Label>
+      )}
+      {model.gateway_access_label === null && (
+        <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '0.3rem' }}>gateway-access: unknown</div>
+      )}
+    </div>
   );
 }
 
@@ -53,22 +81,6 @@ function HostingBadge({ model }: { model: MaasModel }) {
       <Label isCompact color={isExternal ? 'purple' : 'blue'}>
         {isExternal ? 'External' : 'Internal'}
       </Label>
-      <div style={{ fontSize: '0.68rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: '0.3rem' }}>
-        Namespace
-      </div>
-      <div style={{ fontSize: '0.8rem', fontFamily: 'monospace', color: '#333' }}>
-        {model.namespace}
-      </div>
-      {model.gateway_access_label === false && (
-        <Label isCompact color="red" style={{ marginTop: '0.3rem' }}>
-          ⚠ missing gateway-access label
-        </Label>
-      )}
-      {model.gateway_access_label === true && (
-        <Label isCompact color="green" style={{ marginTop: '0.3rem' }}>
-          ✓ gateway-access
-        </Label>
-      )}
       <div style={{ fontSize: '0.72rem', color: '#888', marginTop: '0.3rem' }}>
         {model.kind ?? 'Unknown kind'}
       </div>
@@ -116,17 +128,19 @@ export function ModelsTab() {
         <Thead>
           <Tr>
             <Th>Name</Th>
+            <Th>Namespace</Th>
             <Th>Hosting</Th>
             <Th>Status</Th>
             <Th>Endpoint</Th>
             <Th>Subscriptions</Th>
+            <Th>Auth policy</Th>
             <Th screenReaderText="Actions" />
           </Tr>
         </Thead>
         <Tbody>
           {items.length === 0 ? (
             <Tr>
-              <Td colSpan={6} style={{ color: '#888', fontStyle: 'italic' }}>
+              <Td colSpan={8} style={{ color: '#888', fontStyle: 'italic' }}>
                 No models found.
               </Td>
             </Tr>
@@ -137,6 +151,7 @@ export function ModelsTab() {
                   <div style={{ fontWeight: 700 }}>{model.display_name}</div>
                   <div style={{ fontSize: '0.78rem', color: '#888' }}>{model.description}</div>
                 </Td>
+                <Td><NamespaceCell model={model} /></Td>
                 <Td><HostingBadge model={model} /></Td>
                 <Td>
                   <Label isCompact color={model.ready ? 'green' : 'red'}>
@@ -150,10 +165,8 @@ export function ModelsTab() {
                     <span style={{ color: '#888' }}>—</span>
                   )}
                 </Td>
-                <Td>
-                  <SubscriptionChips subs={model.subscriptions} />
-                  <AuthPolicyBadge hasAuthPolicy={model.has_auth_policy} />
-                </Td>
+                <Td><SubscriptionChips subs={model.subscriptions} /></Td>
+                <Td><AuthPolicyBadge hasAuthPolicy={model.has_auth_policy} /></Td>
                 <Td>
                   <Button variant="link" isInline onClick={() => setYamlModel(model)}>
                     View YAML
