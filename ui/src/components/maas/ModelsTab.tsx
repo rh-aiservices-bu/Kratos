@@ -27,6 +27,20 @@ function SubscriptionChips({ subs }: { subs: MaasModel['subscriptions'] }) {
   );
 }
 
+// `null` means "couldn't tell" (the SA lacks RBAC for auth policies or the
+// namespace) — shown as a muted note, never collapsed into the "missing"
+// (false) case, which reads as an actual misconfiguration to fix.
+function AuthPolicyBadge({ hasAuthPolicy }: { hasAuthPolicy: boolean | null }) {
+  if (hasAuthPolicy === null) {
+    return <div style={{ fontSize: '0.72rem', color: '#888', marginTop: '0.3rem' }}>Auth policy: unknown</div>;
+  }
+  return (
+    <Label isCompact color={hasAuthPolicy ? 'green' : 'orange'} style={{ marginTop: '0.3rem' }}>
+      {hasAuthPolicy ? '✓ has auth policy' : '⚠ no auth policy'}
+    </Label>
+  );
+}
+
 // Answers "is this model served by OpenShift AI itself, or routed out to a
 // third-party provider?" — the badge itself always reads Internal/External;
 // the actual backing kind (LLMInferenceService, ExternalModel, ...) is shown
@@ -39,10 +53,23 @@ function HostingBadge({ model }: { model: MaasModel }) {
       <Label isCompact color={isExternal ? 'purple' : 'blue'}>
         {isExternal ? 'External' : 'Internal'}
       </Label>
-      <div style={{ fontSize: '0.78rem', fontFamily: 'monospace', color: '#444', marginTop: '0.25rem' }}>
+      <div style={{ fontSize: '0.68rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: '0.3rem' }}>
+        Namespace
+      </div>
+      <div style={{ fontSize: '0.8rem', fontFamily: 'monospace', color: '#333' }}>
         {model.namespace}
       </div>
-      <div style={{ fontSize: '0.72rem', color: '#888' }}>
+      {model.gateway_access_label === false && (
+        <Label isCompact color="red" style={{ marginTop: '0.3rem' }}>
+          ⚠ missing gateway-access label
+        </Label>
+      )}
+      {model.gateway_access_label === true && (
+        <Label isCompact color="green" style={{ marginTop: '0.3rem' }}>
+          ✓ gateway-access
+        </Label>
+      )}
+      <div style={{ fontSize: '0.72rem', color: '#888', marginTop: '0.3rem' }}>
         {model.kind ?? 'Unknown kind'}
       </div>
       {typeof model.serving?.replicas === 'number' && (
@@ -123,7 +150,10 @@ export function ModelsTab() {
                     <span style={{ color: '#888' }}>—</span>
                   )}
                 </Td>
-                <Td><SubscriptionChips subs={model.subscriptions} /></Td>
+                <Td>
+                  <SubscriptionChips subs={model.subscriptions} />
+                  <AuthPolicyBadge hasAuthPolicy={model.has_auth_policy} />
+                </Td>
                 <Td>
                   <Button variant="link" isInline onClick={() => setYamlModel(model)}>
                     View YAML

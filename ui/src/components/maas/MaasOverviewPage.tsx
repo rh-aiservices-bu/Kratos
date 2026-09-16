@@ -2,9 +2,12 @@ import { useState } from 'react';
 import { Page, PageSection, Tab, Tabs, TabTitleText } from '@patternfly/react-core';
 import { AccessControlTab } from './AccessControlTab';
 import { ModelsTab } from './ModelsTab';
+import { NetworkingTab } from './NetworkingTab';
+import { PlatformConfigTab } from './PlatformConfigTab';
+import { RateLimitingTab } from './RateLimitingTab';
 import { SubscriptionsTab } from './SubscriptionsTab';
 
-type TabKey = 'subscriptions' | 'models' | 'access';
+type TabKey = 'subscriptions' | 'models' | 'access' | 'rate-limiting' | 'networking' | 'platform';
 
 export function MaasOverviewPage() {
   const [activeTab, setActiveTab] = useState<TabKey>('subscriptions');
@@ -31,6 +34,21 @@ export function MaasOverviewPage() {
           <Tab eventKey="access" title={<TabTitleText>Access Control</TabTitleText>}>
             <div style={{ marginTop: '1rem' }}>
               <AccessControlTab />
+            </div>
+          </Tab>
+          <Tab eventKey="rate-limiting" title={<TabTitleText>Rate Limiting</TabTitleText>}>
+            <div style={{ marginTop: '1rem' }}>
+              <RateLimitingTab />
+            </div>
+          </Tab>
+          <Tab eventKey="networking" title={<TabTitleText>Networking</TabTitleText>}>
+            <div style={{ marginTop: '1rem' }}>
+              <NetworkingTab />
+            </div>
+          </Tab>
+          <Tab eventKey="platform" title={<TabTitleText>Platform Config</TabTitleText>}>
+            <div style={{ marginTop: '1rem' }}>
+              <PlatformConfigTab />
             </div>
           </Tab>
         </Tabs>

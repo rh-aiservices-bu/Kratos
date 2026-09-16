@@ -164,6 +164,16 @@ def test_list_subscriptions_unreachable_cluster_is_unavailable() -> None:
     assert result.reason == "unreachable"
 
 
+_AUTH_POLICY_COVERING_MODEL = {
+    "metadata": {"name": "simulator-access", "namespace": "models-as-a-service", "annotations": {}},
+    "spec": {
+        "modelRefs": [{"name": "facebook-opt-125m-simulated", "namespace": "llm"}],
+        "subjects": {"groups": [{"name": "system:authenticated"}]},
+    },
+    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+}
+
+
 def test_list_models_merges_modelref_llmisvc_and_rest(monkeypatch) -> None:
     monkeypatch.setenv("MAAS_API_URL", "https://maas.example.com")
     monkeypatch.setattr(maas_client, "sa_token", lambda: "test-token")
@@ -175,12 +185,20 @@ def test_list_models_merges_modelref_llmisvc_and_rest(monkeypatch) -> None:
             return {"items": [_MODELREF]}
         if plural == "externalmodels":
             return {"items": []}
+        if plural == "maasauthpolicies":
+            return {"items": [_AUTH_POLICY_COVERING_MODEL]}
         raise AssertionError(f"unexpected plural {plural}")
 
     api.list_cluster_custom_object.side_effect = list_side_effect
     api.get_namespaced_custom_object.return_value = _LLM_ISVC
 
+    core_api = MagicMock()
+    core_api.read_namespace.return_value = MagicMock(
+        metadata=MagicMock(labels={"maas.opendatahub.io/gateway-access": "true"})
+    )
+
     with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client.k8s, "CoreV1Api", return_value=core_api), \
          patch.object(maas_client, "_kube"), \
          patch("httpx.get") as mock_get:
         mock_get.return_value = MagicMock(
@@ -201,6 +219,67 @@ def test_list_models_merges_modelref_llmisvc_and_rest(monkeypatch) -> None:
     assert model["serving"]["replicas"] == 1
     assert "maasModelRef" in model["raw_yaml"]
     assert "llmInferenceService" in model["raw_yaml"]
+    assert model["has_auth_policy"] is True
+    assert model["gateway_access_label"] is True
+    core_api.read_namespace.assert_called_once_with("llm")
+
+
+def test_list_models_flags_missing_auth_policy_and_gateway_label() -> None:
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "maasmodelrefs":
+            return {"items": [_MODELREF]}
+        if plural in ("externalmodels", "maasauthpolicies"):
+            return {"items": []}
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+    api.get_namespaced_custom_object.return_value = _LLM_ISVC
+
+    core_api = MagicMock()
+    core_api.read_namespace.return_value = MagicMock(metadata=MagicMock(labels={}))
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client.k8s, "CoreV1Api", return_value=core_api), \
+         patch.object(maas_client, "_kube"), \
+         patch("httpx.get", side_effect=Exception("no MAAS_API_URL in test env")):
+        result = maas_client.list_models()
+
+    model = result.items[0]
+    assert model["has_auth_policy"] is False
+    assert model["gateway_access_label"] is False
+
+
+def test_list_models_auth_policy_and_gateway_label_unknown_when_unreadable() -> None:
+    """None (not False) when auth policies/namespaces can't be read at all —
+    'unknown' must never collapse into 'confirmed missing'."""
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "maasmodelrefs":
+            return {"items": [_MODELREF]}
+        if plural == "externalmodels":
+            return {"items": []}
+        if plural == "maasauthpolicies":
+            raise ApiException(status=403)
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+    api.get_namespaced_custom_object.return_value = _LLM_ISVC
+
+    core_api = MagicMock()
+    core_api.read_namespace.side_effect = ApiException(status=403)
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client.k8s, "CoreV1Api", return_value=core_api), \
+         patch.object(maas_client, "_kube"), \
+         patch("httpx.get", side_effect=Exception("no MAAS_API_URL in test env")):
+        result = maas_client.list_models()
+
+    model = result.items[0]
+    assert model["has_auth_policy"] is None
+    assert model["gateway_access_label"] is None
 
 
 def test_list_models_external_model_is_labeled_external() -> None:
@@ -219,6 +298,7 @@ def test_list_models_external_model_is_labeled_external() -> None:
     )
 
     with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client.k8s, "CoreV1Api", return_value=MagicMock()), \
          patch.object(maas_client, "_kube"), \
          patch("httpx.get", side_effect=Exception("no MAAS_API_URL in test env")):
         result = maas_client.list_models()
@@ -242,6 +322,7 @@ def test_list_models_survives_rest_call_failure(monkeypatch) -> None:
     api.get_namespaced_custom_object.return_value = _LLM_ISVC
 
     with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client.k8s, "CoreV1Api", return_value=MagicMock()), \
          patch.object(maas_client, "_kube"):
         result = maas_client.list_models()
 
@@ -387,3 +468,270 @@ def test_list_access_unavailable_when_auth_policies_unreadable() -> None:
 
     assert result.available is False
     assert result.reason == "forbidden"
+
+
+_TOKEN_RATE_LIMIT_POLICY = {
+    "metadata": {"name": "maas-trlp-facebook-opt-125m-simulated", "namespace": "llm"},
+    "spec": {
+        "targetRef": {"kind": "HTTPRoute", "name": "facebook-opt-125m-simulated-kserve-route"},
+        "limits": {
+            "models-as-a-service-simulator-free-facebook-opt-125m-simulated-tokens": {
+                "rates": [{"limit": 100, "window": "1m"}]
+            }
+        },
+    },
+    "status": {
+        "conditions": [
+            {"type": "Accepted", "status": "True"},
+            {"type": "Enforced", "status": "True"},
+        ]
+    },
+}
+
+
+def test_list_rate_limit_policies_shapes_fields() -> None:
+    api = _mock_customobjects_api({"items": [_TOKEN_RATE_LIMIT_POLICY]})
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_rate_limit_policies()
+
+    assert result.available
+    policy = result.items[0]
+    assert policy["target_kind"] == "HTTPRoute"
+    assert policy["target_name"] == "facebook-opt-125m-simulated-kserve-route"
+    assert policy["limit_names"] == ["models-as-a-service-simulator-free-facebook-opt-125m-simulated-tokens"]
+    assert policy["accepted"] is True
+    assert policy["enforced"] is True
+
+
+def test_list_rate_limit_policies_forbidden_is_unavailable() -> None:
+    api = _mock_customobjects_api(ApiException(status=403))
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_rate_limit_policies()
+
+    assert result.available is False
+    assert result.reason == "forbidden"
+
+
+_LIMITADOR_CR = {
+    "metadata": {"name": "limitador", "namespace": "kuadrant-system"},
+    "spec": {"limits": [{"name": "a"}, {"name": "b"}]},
+    "status": {
+        "conditions": [{"type": "Ready", "status": "True"}],
+        "service": {"host": "limitador-limitador.kuadrant-system.svc.cluster.local"},
+    },
+}
+
+
+def test_list_limitador_shapes_fields() -> None:
+    api = _mock_customobjects_api({"items": [_LIMITADOR_CR]})
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_limitador()
+
+    assert result.available
+    limitador = result.items[0]
+    assert limitador["limit_count"] == 2
+    assert limitador["ready"] is True
+    assert limitador["service_host"] == "limitador-limitador.kuadrant-system.svc.cluster.local"
+
+
+def test_list_limitador_forbidden_is_unavailable() -> None:
+    api = _mock_customobjects_api(ApiException(status=403))
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_limitador()
+
+    assert result.available is False
+    assert result.reason == "forbidden"
+
+
+_GATEWAY_CR = {
+    "metadata": {"name": "maas-default-gateway", "namespace": "openshift-ingress"},
+    "spec": {"gatewayClassName": "openshift-default"},
+    "status": {
+        "addresses": [{"value": "a5022c964ce964d4f85bc428e4f4a58f-514146043.us-east-2.elb.amazonaws.com"}],
+        "conditions": [{"type": "Programmed", "status": "True"}],
+    },
+}
+
+
+def test_list_gateways_shapes_fields() -> None:
+    api = _mock_customobjects_api({"items": [_GATEWAY_CR]})
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_gateways()
+
+    assert result.available
+    gw = result.items[0]
+    assert gw["gateway_class"] == "openshift-default"
+    assert gw["address"] == "a5022c964ce964d4f85bc428e4f4a58f-514146043.us-east-2.elb.amazonaws.com"
+    assert gw["programmed"] is True
+
+
+def test_list_gateways_forbidden_is_unavailable() -> None:
+    api = _mock_customobjects_api(ApiException(status=403))
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_gateways()
+
+    assert result.available is False
+    assert result.reason == "forbidden"
+
+
+_HTTP_ROUTE_CR = {
+    "metadata": {
+        "name": "facebook-opt-125m-simulated-kserve-route",
+        "namespace": "llm",
+        "ownerReferences": [
+            {"apiVersion": "serving.kserve.io/v1alpha2", "kind": "LLMInferenceService", "name": "facebook-opt-125m-simulated"}
+        ],
+    },
+    "spec": {
+        "parentRefs": [
+            {"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "maas-default-gateway", "namespace": "openshift-ingress"}
+        ]
+    },
+}
+
+
+def test_list_http_routes_traces_owning_model() -> None:
+    api = _mock_customobjects_api({"items": [_HTTP_ROUTE_CR]})
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_http_routes()
+
+    assert result.available
+    route = result.items[0]
+    assert route["parent_gateway"] == "maas-default-gateway"
+    assert route["parent_gateway_namespace"] == "openshift-ingress"
+    assert route["owning_model"] == "facebook-opt-125m-simulated"
+
+
+def test_list_http_routes_no_owner_reference() -> None:
+    route_without_owner = {"metadata": {"name": "some-route", "namespace": "llm"}, "spec": {"parentRefs": []}}
+    api = _mock_customobjects_api({"items": [route_without_owner]})
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_http_routes()
+
+    assert result.items[0]["owning_model"] is None
+    assert result.items[0]["parent_gateway"] is None
+
+
+def test_list_http_routes_forbidden_is_unavailable() -> None:
+    api = _mock_customobjects_api(ApiException(status=403))
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_http_routes()
+
+    assert result.available is False
+    assert result.reason == "forbidden"
+
+
+_TENANT_CR = {
+    "metadata": {"name": "default-tenant", "namespace": "models-as-a-service"},
+    "spec": {
+        "gatewayRef": {"name": "maas-default-gateway", "namespace": "openshift-ingress"},
+        "apiKeys": {"maxExpirationDays": 90},
+        "telemetry": {"enabled": True},
+    },
+    "status": {"phase": "Active"},
+}
+
+_DSC_35_STYLE = {
+    "metadata": {"name": "default-dsc"},
+    "spec": {"components": {"aigateway": {"modelsAsAService": {"managementState": "Managed"}}}},
+}
+
+_DSC_34_STYLE = {
+    "metadata": {"name": "default-dsc"},
+    "spec": {"components": {"kserve": {"modelsAsService": {"managementState": "Managed"}}}},
+}
+
+_ODH_DASHBOARD_CR = {
+    "metadata": {"name": "odh-dashboard-config"},
+    "spec": {
+        "dashboardConfig": {
+            "modelAsService": True,
+            "externalModels": True,
+            "genAiStudio": False,
+            "observabilityDashboard": True,
+        }
+    },
+}
+
+
+def test_list_platform_shapes_all_sections() -> None:
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "tenants":
+            return {"items": [_TENANT_CR]}
+        if plural == "datascienceclusters":
+            return {"items": [_DSC_35_STYLE]}
+        if plural == "odhdashboardconfigs":
+            return {"items": [_ODH_DASHBOARD_CR]}
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        platform = maas_client.list_platform()
+
+    assert platform["tenants"]["available"] is True
+    tenant = platform["tenants"]["items"][0]
+    assert tenant["max_api_key_expiration_days"] == 90
+    assert tenant["telemetry_enabled"] is True
+
+    assert platform["data_science_cluster"]["available"] is True
+    dsc = platform["data_science_cluster"]["item"]
+    assert dsc["maas_management_state"] == "Managed"
+    assert dsc["maas_field_path"] == "aigateway.modelsAsAService"
+
+    assert platform["odh_dashboard_config"]["available"] is True
+    odh = platform["odh_dashboard_config"]["item"]
+    assert odh["model_as_service"] is True
+    assert odh["gen_ai_studio"] is False
+
+
+def test_list_platform_reads_deprecated_34_style_field_path() -> None:
+    api = MagicMock()
+    api.list_cluster_custom_object.side_effect = lambda group, version, plural: (
+        {"items": [_DSC_34_STYLE]} if plural == "datascienceclusters" else {"items": []}
+    )
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        platform = maas_client.list_platform()
+
+    dsc = platform["data_science_cluster"]["item"]
+    assert dsc["maas_management_state"] == "Managed"
+    assert dsc["maas_field_path"] == "kserve.modelsAsService (deprecated)"
+
+
+def test_list_platform_sections_degrade_independently() -> None:
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "tenants":
+            raise ApiException(status=403)
+        if plural == "datascienceclusters":
+            return {"items": [_DSC_35_STYLE]}
+        if plural == "odhdashboardconfigs":
+            raise ApiException(status=404)
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        platform = maas_client.list_platform()
+
+    assert platform["tenants"]["available"] is False
+    assert platform["tenants"]["reason"] == "forbidden"
+    assert platform["data_science_cluster"]["available"] is True
+    assert platform["odh_dashboard_config"]["available"] is False
+    assert platform["odh_dashboard_config"]["reason"] == "not_installed"

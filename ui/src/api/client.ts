@@ -163,6 +163,9 @@ export interface MaasModel {
   ready: boolean;
   endpoint: string | null;
   subscriptions: MaasModelSubscriptionRef[];
+  // null means "couldn't tell" (RBAC/read failure) — never collapse into false.
+  has_auth_policy: boolean | null;
+  gateway_access_label: boolean | null;
   serving: MaasServingInfo | null;
   raw: unknown;
   raw_yaml: string;
@@ -192,6 +195,82 @@ export interface MaasAccessRow {
   access_without_quota: string[];
 }
 
+export interface MaasTokenRateLimitPolicy {
+  name: string;
+  namespace: string;
+  target_kind: string | null;
+  target_name: string | null;
+  limit_names: string[];
+  accepted: boolean;
+  enforced: boolean;
+  raw_yaml: string;
+}
+
+export interface MaasLimitador {
+  name: string;
+  namespace: string;
+  limit_count: number;
+  ready: boolean;
+  service_host: string | null;
+  raw_yaml: string;
+}
+
+export interface MaasGateway {
+  name: string;
+  namespace: string;
+  gateway_class: string | null;
+  address: string | null;
+  programmed: boolean;
+  raw_yaml: string;
+}
+
+export interface MaasHttpRoute {
+  name: string;
+  namespace: string;
+  parent_gateway: string | null;
+  parent_gateway_namespace: string | null;
+  owning_model: string | null;
+  raw_yaml: string;
+}
+
+export interface MaasTenant {
+  name: string;
+  namespace: string;
+  gateway_ref: { name: string; namespace: string } | null;
+  max_api_key_expiration_days: number | null;
+  telemetry_enabled: boolean | null;
+  phase: string | null;
+  raw_yaml: string;
+}
+
+export interface MaasDataScienceCluster {
+  name: string;
+  maas_management_state: string | null;
+  maas_field_path: string | null;
+  raw_yaml: string;
+}
+
+export interface MaasOdhDashboardConfig {
+  name: string;
+  model_as_service: boolean | null;
+  external_models: boolean | null;
+  gen_ai_studio: boolean | null;
+  observability_dashboard: boolean | null;
+  raw_yaml: string;
+}
+
+export interface MaasPlatformSection<T> {
+  available: boolean;
+  reason: string | null;
+  item: T | null;
+}
+
+export interface MaasPlatform {
+  tenants: MaasSectionResult<MaasTenant>;
+  data_science_cluster: MaasPlatformSection<MaasDataScienceCluster>;
+  odh_dashboard_config: MaasPlatformSection<MaasOdhDashboardConfig>;
+}
+
 export interface MaasSectionResult<T> {
   available: boolean;
   reason: string | null;
@@ -218,5 +297,37 @@ export function getMaasModels(): Promise<MaasSectionResult<MaasModel>> {
 
 export function getMaasAccess(): Promise<MaasSectionResult<MaasAccessRow>> {
   return fetchMaasSection('/api/maas/access');
+}
+
+export function getMaasRateLimitPolicies(): Promise<MaasSectionResult<MaasTokenRateLimitPolicy>> {
+  return fetchMaasSection('/api/maas/rate-limit-policies');
+}
+
+export function getMaasLimitador(): Promise<MaasSectionResult<MaasLimitador>> {
+  return fetchMaasSection('/api/maas/limitador');
+}
+
+export function getMaasGateways(): Promise<MaasSectionResult<MaasGateway>> {
+  return fetchMaasSection('/api/maas/gateways');
+}
+
+export function getMaasHttpRoutes(): Promise<MaasSectionResult<MaasHttpRoute>> {
+  return fetchMaasSection('/api/maas/http-routes');
+}
+
+const UNAVAILABLE_PLATFORM: MaasPlatform = {
+  tenants: { available: false, reason: 'network_error', items: [] },
+  data_science_cluster: { available: false, reason: 'network_error', item: null },
+  odh_dashboard_config: { available: false, reason: 'network_error', item: null },
+};
+
+export async function getMaasPlatform(): Promise<MaasPlatform> {
+  try {
+    const r = await fetch('/api/maas/platform');
+    if (!r.ok) return UNAVAILABLE_PLATFORM;
+    return (await r.json()) as MaasPlatform;
+  } catch {
+    return UNAVAILABLE_PLATFORM;
+  }
 }
 

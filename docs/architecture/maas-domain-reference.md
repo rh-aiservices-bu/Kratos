@@ -6,10 +6,13 @@ Findings from live-cluster research (`oc get`/`-o yaml` as `kube:admin` against 
 - Red Hat docs (RHOAI 3.5): [Govern LLM access with Models-as-a-Service](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/html/govern_llm_access_with_models-as-a-service/deploy-and-manage-models-as-a-service)
 - Upstream docs: [opendatahub-io.github.io/models-as-a-service](https://opendatahub-io.github.io/models-as-a-service/latest/)
 - Upstream repo (CRDs/controller source of truth): [github.com/opendatahub-io/models-as-a-service](https://github.com/opendatahub-io/models-as-a-service)
+- Community install/ops guide: [rh-aiservices-bu.github.io/rhoai-maas-guide](https://rh-aiservices-bu.github.io/rhoai-maas-guide/modules/main/index.html) — not an official Red Hat doc, but the source of the version-split `ExternalModel` schema, the credential-secret labeling requirement, and the `MaaSModelRef` governance-pairing rule below; cross-checked against this cluster where possible.
 
 **Known discrepancy found during this research (tracked separately, not fixed here):** `harness/tasks/subscription.py` writes `MaaSSubscription.spec.rpsLimit`. The live CRD schema below (`spec.modelRefs[].tokenRateLimits[]`, `spec.owner`, `spec.priority`) has no `rpsLimit` field at all — `rate_limit_validation` is likely broken against current RHOAI MaaS versions.
 
-**Implementation status in the UI** (each section below is marked; see ADR-017 for the backend/frontend design): **A (Subscriptions)**, **B (Models)**, and **C (Access Control)** are live in the "MaaS Setup" tab. **D–I are catalog-only so far** — read here to understand the domain, but not yet surfaced as their own UI tabs.
+**This cluster runs the RHOAI 3.4-era MaaS implementation throughout** — confirmed via three independent signals, not just one: `ExternalModel`/`MaaSModelRef`/`MaaSAuthPolicy`/`MaaSSubscription` all live under `maas.opendatahub.io/v1alpha1` (the 3.4-era API group; 3.5+ moves `ExternalModel` to `inference.opendatahub.io/v1alpha1` split into `ExternalProvider`+`ExternalModel`, per the community guide), and `DataScienceCluster` uses the deprecated `spec.components.kserve.modelsAsService.managementState` field rather than 3.5+'s `aigateway.modelsAsAService`. A different cluster could be on either — `api/maas_client.py:list_platform()` checks both DataScienceCluster field paths rather than assuming one, but the `ExternalModel` group/version is not similarly dual-checked (see Consequences in ADR-017).
+
+**Implementation status in the UI** (each section below is marked; see ADR-017 for the backend/frontend design): **A (Subscriptions)**, **B (Models)**, **C (Access Control)**, **D (Rate-Limiting Enforcement)**, **E (Tenant/Platform Configuration)**, and **F (Gateway/Networking)** are live in the "MaaS Setup" tab. **G–I are catalog-only so far** — read here to understand the domain, but not yet surfaced as their own UI tabs.
 
 ## A. Subscriptions — `MaaSSubscription` (`maas.opendatahub.io/v1alpha1`, namespaced) — ✅ in UI
 
@@ -50,9 +53,17 @@ Three sources, merged (see `api/maas_client.py:list_models`):
 2. **`GET /v1/models`** (MaaS REST, works with an SA token or an API key): `id`, `url`, `ready`, `owned_by` (`"<namespace>/<MaaSModelRef name>"` — the join key back to (1)), `modelDetails.{displayName,description}`, `subscriptions[]`.
 3. **`LLMInferenceService`** (`serving.kserve.io/v1alpha2`, only when `modelRef.kind == LLMInferenceService`): `spec.replicas`, container `resources.{requests,limits}` (cpu/mem/GPU), `spec.router.gateway.refs`, `status.conditions[]` (`GatewaysReady`, `HTTPRoutesReady`, `MainWorkloadReady`, `RouterReady`, `WorkloadsReady`, `PresetsCombined`), `status.url`/`status.addresses[]` (internal + external).
 
-`ExternalModel` (`maas.opendatahub.io/v1alpha1`, tech preview) maps a client-facing model name to an external provider (OpenAI/Bedrock/Gemini-style), with request-translation-vs-passthrough mode. None deployed on the research cluster — schema not fully verified live; `api/maas_client.py` shapes these minimally and always keeps the raw CR available rather than guessing at fields.
+`ExternalModel` maps a client-facing model name to an external provider (OpenAI/Bedrock/Gemini-style), with request-translation-vs-passthrough mode. **Schema is RHOAI-version-dependent** (per the community guide; none deployed on the research cluster to verify live, but the group/version match confirms this cluster is on the 3.4-era shape):
+- **3.4** (`maas.opendatahub.io/v1alpha1`, single CRD — what `api/maas_client.py` currently queries): `spec.{provider, targetModel, endpoint, credentialRef}`.
+- **3.5+** (`inference.opendatahub.io/v1alpha1`, split in two): `ExternalProvider` (`spec.{provider, endpoint, auth.secretRef}`) referenced by `ExternalModel` (`spec.{modelName, externalProviderRefs[].{ref, targetModel, apiFormat, path}}`). **Not currently read by `api/maas_client.py`** — a 3.5+ cluster's external models won't appear in the Models tab until this is added (tracked, not yet done).
+
+Governance pairing rule (community guide, worth restating precisely): *"a `MaaSModelRef` transitions to Ready only when both a `MaaSSubscription` AND a `MaaSAuthPolicy` reference it"* — updating one does not auto-sync the other. `list_models()` surfaces the auth-policy half of this directly (`has_auth_policy`, cross-referencing live `MaaSAuthPolicy.spec.modelRefs[]`); the subscription half is already visible via `subscriptions[]`.
+
+**Credential `Secret` for `ExternalProvider` auth** — a genuinely separate object this catalog previously missed entirely, and **not yet read or surfaced anywhere in this UI**. Per the community guide, the Secret holding the external provider's API key must carry its own label for the gateway's wasm-shim to find and inject it: `inference.llm-d.ai/ipp-managed=true` (3.5+) or `inference.networking.k8s.io/bbr-managed=true` (3.4). Deliberately out of scope to display beyond an existence/label check (never the Secret's contents) if this is ever added — see Consequences in ADR-017 for why it isn't yet.
 
 Each shaped model also carries a `hosting: "internal" | "external"` field, computed once in `api/maas_client.py` (`"internal"` iff `modelRef.kind == LLMInferenceService`) rather than left for the UI to re-derive from `kind` — so "is this actually served by OpenShift AI, or routed out to a third party?" has one answer, not one per caller.
+
+**Namespace `maas.opendatahub.io/gateway-access` label** — confirmed live and in the community guide: *"Without it, the Gateway will not accept HTTPRoutes from this namespace and the model will not be reachable."* Required on any namespace hosting a model, internal or external. Confirmed present on `llm` and `redhat-ods-applications`, absent (correctly — it doesn't host a model) on `models-as-a-service`. `list_models()` reads this per model's namespace (`gateway_access_label: bool | None`, cached per-namespace within one call; `None` means the namespace couldn't be read, not that the label is confirmed missing) and the Models tab surfaces it as a warning when `false`.
 
 ## C. Access Control — ✅ in UI
 
@@ -62,7 +73,7 @@ Each shaped model also carries a `hosting: "internal" | "external"` field, compu
 
 **OpenShift `Group`** (`user.openshift.io/v1`, cluster-scoped): `metadata.name`, `users[]` — resolves a subscription's/auth-policy's group references down to actual usernames. MaaS "assigns users to subscriptions based on OpenShift group membership"; a user in multiple groups gets the highest-priority subscription among them (upstream docs). Research cluster has one group (`rhods-admins`, empty membership) — the feature must not assume any groups exist.
 
-## D. Rate-Limiting Enforcement (the layer beneath the CRDs above)
+## D. Rate-Limiting Enforcement (the layer beneath the CRDs above) — ✅ in UI
 
 What the `MaaSSubscription`/`MaaSAuthPolicy` intent actually compiles down to. Useful when a scenario's rate-limit assertion behaves unexpectedly and the CRD-level view alone doesn't explain why.
 
@@ -94,17 +105,19 @@ This is *why* "auth policy without a subscription" fails closed rather than open
 
 **`Limitador`** (`limitador.kuadrant.io/v1alpha1`, cluster-singleton, in `kuadrant-system`): `spec.limits[]` (`name`, `max_value`, `seconds`, `namespace`, `conditions`, `variables`) — the literal counter definitions Envoy/Limitador enforce; `status.service.{host,ports}`.
 
-## E. Tenant / Platform Configuration
+**Authorino `AuthConfig`** (`authorino.kuadrant.io/v1beta3`, in `kuadrant-system`) is the object `MaaSAuthPolicy` compiles down to — the direct analogue of `TokenRateLimitPolicy` on the authorization side rather than the quota side. Confirmed live: `spec.authentication` (API-key pattern match + OpenShift token review, mutually exclusive by `when` predicate), `spec.metadata.apiKeyValidation` (calls `maas-api`'s internal validate endpoint), `spec.response.success.headers` (injects `X-MaaS-Group`/`X-MaaS-Subscription` for downstream use). **Deliberately not surfaced in the UI**: names are content-addressed hashes with no human-readable link back to a `MaaSAuthPolicy`, and every `AuthConfig` in `kuadrant-system` (MaaS-relevant or not) looks equally opaque — listing them would be noise, not signal. See `list_rate_limit_policies()` in ADR-017 for this reasoning in code.
+
+## E. Tenant / Platform Configuration — ✅ in UI
 
 - **`Tenant`** (deprecated) / **`MaasTenantConfig`** (current): `spec.gatewayRef`, `spec.apiKeys.maxExpirationDays`, `spec.telemetry.{enabled, metrics.captureOrganization/User/Group/ModelUsage}`, `status.phase/conditions`. Live example: `default-tenant` in `models-as-a-service`, `gatewayRef: {name: maas-default-gateway, namespace: openshift-ingress}`, phase `Active`.
 - **`AITenant`** (tech preview multi-tenancy): dedicated tenant namespace, gateway, OIDC config — not in use on the research cluster.
-- **`DataScienceCluster`**: `spec.components.aigateway.modelsAsAService.managementState: Managed` confirms MaaS itself is enabled.
-- **`OdhDashboardConfig`** (`redhat-ods-applications`): `spec.dashboardConfig.{modelAsService, vLLMDeploymentOnMaaS, genAiStudio, externalModels, observabilityDashboard}` — adjacent RHOAI dashboard feature flags. All `true` on the research cluster.
+- **`DataScienceCluster`** (`datasciencecluster.opendatahub.io/v2`, cluster-scoped, name `default-dsc`): confirms MaaS itself is enabled, but **the field path is RHOAI-version-dependent** — 3.5+ uses `spec.components.aigateway.modelsAsAService.managementState`; 3.4 (confirmed live on this cluster) uses the deprecated `spec.components.kserve.modelsAsService.managementState`. `list_platform()` checks both rather than assuming one.
+- **`OdhDashboardConfig`** (`opendatahub.io/v1alpha`, name `odh-dashboard-config`, in `redhat-ods-applications`): `spec.dashboardConfig.{modelAsService, vLLMDeploymentOnMaaS, genAiStudio, externalModels, observabilityDashboard}` — adjacent RHOAI dashboard feature flags. All `true` on the research cluster.
 
-## F. Gateway / Networking
+## F. Gateway / Networking — ✅ in UI
 
 - **`Gateway`** `maas-default-gateway` (`gateway.networking.k8s.io`, in `openshift-ingress`): LB address, class, `Programmed` condition.
-- **`HTTPRoute`** per model: name (`<model>-kserve-route` pattern), namespace, parent gateway.
+- **`HTTPRoute`** per model: name (`<model>-kserve-route` pattern), namespace, parent gateway. `metadata.ownerReferences` points back to the owning `LLMInferenceService` (confirmed live) — `list_http_routes()` uses this to trace a route to its model directly, rather than guessing from the route's name.
 
 ## G. Live Usage
 

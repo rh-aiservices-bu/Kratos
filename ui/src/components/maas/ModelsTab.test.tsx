@@ -30,6 +30,8 @@ const baseModel: MaasModel = {
   subscriptions: [
     { name: 'simulator-free', display_name: 'Simulator Free Tier', description: null },
   ],
+  has_auth_policy: true,
+  gateway_access_label: true,
   serving: { replicas: 1, resources: null, conditions: [] },
   raw: {},
   raw_yaml: 'maasModelRef:\n  kind: MaaSModelRef\n',
@@ -56,6 +58,38 @@ test('renders model rows with hosting, status, endpoint, and subscriptions', asy
   expect(screen.getByText('https://maas.example.com/llm/facebook-opt-125m-simulated')).toBeInTheDocument();
   expect(screen.getByText('Simulator Free Tier')).toBeInTheDocument();
   expect(screen.getByText('1 replica')).toBeInTheDocument();
+  expect(screen.getByText('Namespace')).toBeInTheDocument();
+  expect(screen.getByText('✓ gateway-access')).toBeInTheDocument();
+  expect(screen.getByText('✓ has auth policy')).toBeInTheDocument();
+});
+
+test('flags a namespace missing the gateway-access label', async () => {
+  const noLabel: MaasModel = { ...baseModel, gateway_access_label: false };
+  mockGetModels.mockResolvedValue({ available: true, reason: null, items: [noLabel] });
+
+  render(<ModelsTab />);
+
+  expect(await screen.findByText('⚠ missing gateway-access label')).toBeInTheDocument();
+});
+
+test('flags a model with no matching auth policy', async () => {
+  const noAuthPolicy: MaasModel = { ...baseModel, has_auth_policy: false };
+  mockGetModels.mockResolvedValue({ available: true, reason: null, items: [noAuthPolicy] });
+
+  render(<ModelsTab />);
+
+  expect(await screen.findByText('⚠ no auth policy')).toBeInTheDocument();
+});
+
+test('shows unknown (not a false negative) when auth-policy/label state cannot be read', async () => {
+  const unknown: MaasModel = { ...baseModel, has_auth_policy: null, gateway_access_label: null };
+  mockGetModels.mockResolvedValue({ available: true, reason: null, items: [unknown] });
+
+  render(<ModelsTab />);
+
+  expect(await screen.findByText('Auth policy: unknown')).toBeInTheDocument();
+  expect(screen.queryByText('⚠ missing gateway-access label')).not.toBeInTheDocument();
+  expect(screen.queryByText('✓ gateway-access')).not.toBeInTheDocument();
 });
 
 test('shows an External badge for externally-hosted models', async () => {

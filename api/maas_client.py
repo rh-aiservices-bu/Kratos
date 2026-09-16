@@ -25,7 +25,23 @@ _KSERVE_GROUP = "serving.kserve.io"
 _KSERVE_VERSION = "v1alpha2"
 _OPENSHIFT_USER_GROUP = "user.openshift.io"
 _OPENSHIFT_USER_VERSION = "v1"
+_KUADRANT_GROUP = "kuadrant.io"
+_KUADRANT_VERSION = "v1alpha1"
+_LIMITADOR_GROUP = "limitador.kuadrant.io"
+_LIMITADOR_VERSION = "v1alpha1"
+_GATEWAY_GROUP = "gateway.networking.k8s.io"
+_GATEWAY_VERSION = "v1"
+_DSC_GROUP = "datasciencecluster.opendatahub.io"
+_DSC_VERSION = "v2"
+_ODH_DASHBOARD_GROUP = "opendatahub.io"
+_ODH_DASHBOARD_VERSION = "v1alpha"
 _SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+# Required on a model's namespace for the Gateway to accept HTTPRoutes from
+# it at all — confirmed live and against the community RHOAI MaaS guide
+# (https://rh-aiservices-bu.github.io/rhoai-maas-guide/). Applies to internal
+# (LLMInferenceService) and external (ExternalModel) model namespaces alike.
+_GATEWAY_ACCESS_LABEL = "maas.opendatahub.io/gateway-access"
 
 _kube_loaded = False
 
@@ -99,6 +115,23 @@ def _get(group: str, version: str, namespace: str, plural: str, name: str) -> di
         return api.get_namespaced_custom_object(
             group=group, version=version, namespace=namespace, plural=plural, name=name
         )
+    except Exception:
+        return None
+
+
+def _namespace_has_gateway_access_label(name: str) -> bool | None:
+    """Whether a namespace carries `maas.opendatahub.io/gateway-access: "true"`.
+
+    Returns None (not False) when the namespace can't be read at all — RBAC
+    denial or the namespace not existing must read as "unknown", never as a
+    confirmed-missing label the UI would flag as a misconfiguration.
+    """
+    _kube()
+    api = k8s.CoreV1Api()
+    try:
+        ns = api.read_namespace(name)
+        labels = ns.metadata.labels or {}
+        return labels.get(_GATEWAY_ACCESS_LABEL) == "true"
     except Exception:
         return None
 
@@ -198,6 +231,30 @@ def list_models() -> ResourceList:
     _, rest_models = _fetch_v1_models()
     rest_by_owner = {m.get("owned_by"): m for m in rest_models}
 
+    # A MaaSModelRef only reaches Ready when BOTH a MaaSSubscription AND a
+    # MaaSAuthPolicy reference it (confirmed live + community guide) — the
+    # Models tab already shows subscription coverage via `subscriptions[]`
+    # below; this adds the other half. `None` (not False) when auth policies
+    # can't be read at all, since "no policy" and "can't tell" are different
+    # things to show an admin.
+    auth_result = _list(_MAAS_GROUP, _MAAS_VERSION, "maasauthpolicies")
+    auth_covered_models: set[tuple[str, str]] | None = None
+    if auth_result.available:
+        auth_covered_models = {
+            (m.get("namespace"), m.get("name"))
+            for cr in auth_result.items
+            for m in (cr.get("spec", {}).get("modelRefs") or [])
+        }
+
+    # Cache namespace label lookups within this call — several models
+    # commonly share one namespace (e.g. all internally-served models in `llm`).
+    _namespace_gateway_access: dict[str, bool | None] = {}
+
+    def _gateway_access_for(namespace: str) -> bool | None:
+        if namespace not in _namespace_gateway_access:
+            _namespace_gateway_access[namespace] = _namespace_has_gateway_access_label(namespace)
+        return _namespace_gateway_access[namespace]
+
     shaped = []
     for cr in modelrefs_result.items if modelrefs_result.available else []:
         meta = cr.get("metadata", {})
@@ -257,6 +314,11 @@ def list_models() -> ResourceList:
                     }
                     for s in ((rest_entry or {}).get("subscriptions") or [])
                 ],
+                "has_auth_policy": (
+                    (namespace, name) in auth_covered_models
+                    if auth_covered_models is not None else None
+                ),
+                "gateway_access_label": _gateway_access_for(namespace),
                 "serving": serving,
                 "raw": cr,
                 "raw_yaml": _to_yaml(yaml_doc),
@@ -280,6 +342,11 @@ def list_models() -> ResourceList:
                 "ready": False,
                 "endpoint": None,
                 "subscriptions": [],
+                "has_auth_policy": (
+                    (namespace, name) in auth_covered_models
+                    if auth_covered_models is not None else None
+                ),
+                "gateway_access_label": _gateway_access_for(namespace),
                 "serving": None,
                 "raw": cr,
                 "raw_yaml": _to_yaml(cr),
@@ -385,5 +452,206 @@ def list_access() -> ResourceList:
                 "access_without_quota": sorted(f"{ns}/{n}" for ns, n in access_models - quota_models),
             }
         )
+
+    return ResourceList(available=True, items=rows)
+
+
+def list_rate_limit_policies() -> ResourceList:
+    """`TokenRateLimitPolicy` (Kuadrant) — the object a `MaaSSubscription`
+    actually compiles down to. See Catalog item D. Deliberately does not
+    also list Authorino `AuthConfig` (the analogous object beneath
+    `MaaSAuthPolicy`) — those are hash-named and live alongside every other
+    AuthConfig in `kuadrant-system` with no reliable way to filter to only
+    MaaS-relevant ones, so listing them would be noise rather than signal.
+    """
+    result = _list(_KUADRANT_GROUP, _KUADRANT_VERSION, "tokenratelimitpolicies")
+    if not result.available:
+        return result
+
+    shaped = []
+    for cr in result.items:
+        meta = cr.get("metadata", {})
+        spec = cr.get("spec", {})
+        status = cr.get("status", {})
+        target_ref = spec.get("targetRef", {})
+        limits = spec.get("limits") or spec.get("defaults", {}).get("limits") or {}
+        conditions = status.get("conditions", [])
+        shaped.append(
+            {
+                "name": meta.get("name"),
+                "namespace": meta.get("namespace"),
+                "target_kind": target_ref.get("kind"),
+                "target_name": target_ref.get("name"),
+                "limit_names": sorted(limits.keys()),
+                "accepted": _is_ready(conditions, "Accepted"),
+                "enforced": _is_ready(conditions, "Enforced"),
+                "raw_yaml": _to_yaml(cr),
+            }
+        )
+
+    return ResourceList(available=True, items=shaped)
+
+
+def list_limitador() -> ResourceList:
+    """`Limitador` — the cluster-singleton counter definitions Envoy/Limitador
+    actually enforce, the literal compiled form of every `TokenRateLimitPolicy`.
+    See Catalog item D."""
+    result = _list(_LIMITADOR_GROUP, _LIMITADOR_VERSION, "limitadors")
+    if not result.available:
+        return result
+
+    shaped = []
+    for cr in result.items:
+        meta = cr.get("metadata", {})
+        spec = cr.get("spec", {})
+        status = cr.get("status", {})
+        service = status.get("service", {})
+        shaped.append(
+            {
+                "name": meta.get("name"),
+                "namespace": meta.get("namespace"),
+                "limit_count": len(spec.get("limits") or []),
+                "ready": _is_ready(status.get("conditions", [])),
+                "service_host": service.get("host"),
+                "raw_yaml": _to_yaml(cr),
+            }
+        )
+
+    return ResourceList(available=True, items=shaped)
+
+
+def list_gateways() -> ResourceList:
+    """`Gateway` (Gateway API) — the entry point every model route attaches
+    to. See Catalog item F."""
+    result = _list(_GATEWAY_GROUP, _GATEWAY_VERSION, "gateways")
+    if not result.available:
+        return result
+
+    shaped = []
+    for cr in result.items:
+        meta = cr.get("metadata", {})
+        spec = cr.get("spec", {})
+        status = cr.get("status", {})
+        addresses = status.get("addresses") or []
+        conditions = status.get("conditions", [])
+        shaped.append(
+            {
+                "name": meta.get("name"),
+                "namespace": meta.get("namespace"),
+                "gateway_class": spec.get("gatewayClassName"),
+                "address": addresses[0].get("value") if addresses else None,
+                "programmed": _is_ready(conditions, "Programmed"),
+                "raw_yaml": _to_yaml(cr),
+            }
+        )
+
+    return ResourceList(available=True, items=shaped)
+
+
+def list_http_routes() -> ResourceList:
+    """`HTTPRoute` (Gateway API) — one per model, routing gateway traffic to
+    the backing Service. `owning_model`/`owning_model_namespace` come from
+    the route's `ownerReferences` (set by the KServe/LLMInferenceService
+    controller), letting the UI trace a route straight back to its model
+    without guessing from the route's name. See Catalog item F."""
+    result = _list(_GATEWAY_GROUP, _GATEWAY_VERSION, "httproutes")
+    if not result.available:
+        return result
+
+    shaped = []
+    for cr in result.items:
+        meta = cr.get("metadata", {})
+        spec = cr.get("spec", {})
+        owner_refs = meta.get("ownerReferences") or []
+        owning_model = next(
+            (o for o in owner_refs if o.get("kind") == "LLMInferenceService"), None
+        )
+        parent_refs = spec.get("parentRefs") or []
+        parent = parent_refs[0] if parent_refs else {}
+        shaped.append(
+            {
+                "name": meta.get("name"),
+                "namespace": meta.get("namespace"),
+                "parent_gateway": parent.get("name"),
+                "parent_gateway_namespace": parent.get("namespace"),
+                "owning_model": owning_model.get("name") if owning_model else None,
+                "raw_yaml": _to_yaml(cr),
+            }
+        )
+
+    return ResourceList(available=True, items=shaped)
+
+
+def list_platform() -> dict:
+    """Platform-level MaaS configuration — `Tenant`/`MaasTenantConfig`,
+    `DataScienceCluster` (confirms MaaS itself is enabled), and
+    `OdhDashboardConfig` (adjacent dashboard feature flags). See Catalog
+    item E.
+
+    Returns a plain dict, not a `ResourceList` — unlike every other
+    `list_*()` here, this isn't one list of similar objects but three
+    independently-degrading settings sections (each backed by a different
+    RBAC grant), so each gets its own `available`/`reason` inline.
+    """
+    tenants = _list(_MAAS_GROUP, _MAAS_VERSION, "tenants")
+    shaped_tenants = []
+    if tenants.available:
+        for cr in tenants.items:
+            meta = cr.get("metadata", {})
+            spec = cr.get("spec", {})
+            status = cr.get("status", {})
+            shaped_tenants.append(
+                {
+                    "name": meta.get("name"),
+                    "namespace": meta.get("namespace"),
+                    "gateway_ref": spec.get("gatewayRef"),
+                    "max_api_key_expiration_days": spec.get("apiKeys", {}).get("maxExpirationDays"),
+                    "telemetry_enabled": spec.get("telemetry", {}).get("enabled"),
+                    "phase": status.get("phase"),
+                    "raw_yaml": _to_yaml(cr),
+                }
+            )
+
+    dsc = _list(_DSC_GROUP, _DSC_VERSION, "datascienceclusters")
+    dsc_item = None
+    if dsc.available and dsc.items:
+        cr = dsc.items[0]
+        components = cr.get("spec", {}).get("components", {})
+        # Field path is RHOAI-version-dependent: 3.5+ uses
+        # aigateway.modelsAsAService, 3.4 uses the deprecated
+        # kserve.modelsAsService — check both rather than assume one, since a
+        # given cluster could be running either.
+        aigateway_state = components.get("aigateway", {}).get("modelsAsAService", {}).get("managementState")
+        kserve_state = components.get("kserve", {}).get("modelsAsService", {}).get("managementState")
+        dsc_item = {
+            "name": cr.get("metadata", {}).get("name"),
+            "maas_management_state": aigateway_state or kserve_state,
+            "maas_field_path": (
+                "aigateway.modelsAsAService" if aigateway_state
+                else "kserve.modelsAsService (deprecated)" if kserve_state
+                else None
+            ),
+            "raw_yaml": _to_yaml(cr),
+        }
+
+    odh = _list(_ODH_DASHBOARD_GROUP, _ODH_DASHBOARD_VERSION, "odhdashboardconfigs")
+    odh_item = None
+    if odh.available and odh.items:
+        cr = odh.items[0]
+        flags = cr.get("spec", {}).get("dashboardConfig", {})
+        odh_item = {
+            "name": cr.get("metadata", {}).get("name"),
+            "model_as_service": flags.get("modelAsService"),
+            "external_models": flags.get("externalModels"),
+            "gen_ai_studio": flags.get("genAiStudio"),
+            "observability_dashboard": flags.get("observabilityDashboard"),
+            "raw_yaml": _to_yaml(cr),
+        }
+
+    return {
+        "tenants": {"available": tenants.available, "reason": tenants.reason, "items": shaped_tenants},
+        "data_science_cluster": {"available": dsc.available, "reason": dsc.reason, "item": dsc_item},
+        "odh_dashboard_config": {"available": odh.available, "reason": odh.reason, "item": odh_item},
+    }
 
     return ResourceList(available=True, items=rows)
