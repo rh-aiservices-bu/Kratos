@@ -1,25 +1,33 @@
 import { useEffect, useState } from 'react';
 import { Grid, GridItem, Page, PageSection } from '@patternfly/react-core';
+import { MaasOverviewPage } from './components/maas/MaasOverviewPage';
 import { RunDetail } from './components/RunDetail';
 import { RunHistory } from './components/RunHistory';
 import { RunTrigger } from './components/RunTrigger';
 import { ScenarioList } from './components/ScenarioList';
 import type { Scenario } from './api/client';
 
-type AppView = { page: 'home' } | { page: 'run'; runId: string };
+type AppView = { page: 'home' } | { page: 'maas' } | { page: 'run'; runId: string };
 
 function getViewFromHash(): AppView {
   const match = window.location.hash.match(/^#run\/(.+)$/);
   if (match) return { page: 'run', runId: match[1] };
+  if (window.location.hash === '#maas') return { page: 'maas' };
   return { page: 'home' };
 }
 
 function navigateTo(view: AppView): void {
-  const hash = view.page === 'run' ? `#run/${view.runId}` : '';
+  const hash = view.page === 'run' ? `#run/${view.runId}` : view.page === 'maas' ? '#maas' : '';
   window.history.pushState({}, '', window.location.pathname + hash);
 }
 
-function KratosMasthead() {
+function KratosMasthead({
+  activeNav,
+  onNavigate,
+}: {
+  activeNav: 'home' | 'maas' | null;
+  onNavigate: (page: 'home' | 'maas') => void;
+}) {
   return (
     <header className="kratos-masthead">
       <div className="kratos-masthead__logo">
@@ -30,6 +38,22 @@ function KratosMasthead() {
       </div>
       <div className="kratos-masthead__divider" />
       <span className="kratos-masthead__subtitle">RHOAI Test Harness</span>
+      {activeNav !== null && (
+        <nav className="kratos-topnav">
+          <button
+            className={`kratos-topnav__link${activeNav === 'home' ? ' kratos-topnav__link--active' : ''}`}
+            onClick={() => onNavigate('home')}
+          >
+            Runs
+          </button>
+          <button
+            className={`kratos-topnav__link${activeNav === 'maas' ? ' kratos-topnav__link--active' : ''}`}
+            onClick={() => onNavigate('maas')}
+          >
+            MaaS Setup
+          </button>
+        </nav>
+      )}
     </header>
   );
 }
@@ -65,10 +89,16 @@ function App() {
     window.history.back();
   }
 
+  function handleNavigate(page: 'home' | 'maas') {
+    const next: AppView = { page };
+    navigateTo(next);
+    setView(next);
+  }
+
   if (view.page === 'run') {
     return (
       <>
-        <KratosMasthead />
+        <KratosMasthead activeNav={null} onNavigate={handleNavigate} />
         <RunDetail
           runId={view.runId}
           onBack={handleBack}
@@ -77,9 +107,18 @@ function App() {
     );
   }
 
+  if (view.page === 'maas') {
+    return (
+      <>
+        <KratosMasthead activeNav="maas" onNavigate={handleNavigate} />
+        <MaasOverviewPage />
+      </>
+    );
+  }
+
   return (
     <>
-      <KratosMasthead />
+      <KratosMasthead activeNav="home" onNavigate={handleNavigate} />
       <Page>
         <PageSection>
           <Grid hasGutter>

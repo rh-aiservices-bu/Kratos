@@ -1,0 +1,389 @@
+"""Unit tests for api/maas_client.py against fixture shapes captured live from
+cluster-rkmhx.rkmhx.sandbox1230.opentlc.com (see docs/architecture/maas-domain-reference.md).
+"""
+from unittest.mock import MagicMock, patch
+
+from kubernetes.client.exceptions import ApiException
+
+from api import maas_client
+
+_SUBSCRIPTION_FREE = {
+    "metadata": {
+        "name": "simulator-free",
+        "namespace": "models-as-a-service",
+        "annotations": {
+            "openshift.io/display-name": "Simulator Free Tier",
+            "openshift.io/description": "Free tier: 100 tokens/min for all authenticated users",
+        },
+    },
+    "spec": {
+        "priority": 10,
+        "owner": {"groups": [{"name": "system:authenticated"}], "users": []},
+        "modelRefs": [
+            {
+                "name": "facebook-opt-125m-simulated",
+                "namespace": "llm",
+                "tokenRateLimits": [{"limit": 100, "window": "1m"}],
+            }
+        ],
+    },
+    "status": {
+        "phase": "Active",
+        "conditions": [
+            {"type": "Ready", "status": "True"},
+            {"type": "SpecPriorityDuplicate", "status": "False"},
+        ],
+    },
+}
+
+_SUBSCRIPTION_CONFLICTING = {
+    "metadata": {"name": "dup-sub", "namespace": "models-as-a-service", "annotations": {}},
+    "spec": {"priority": 10, "owner": {"groups": [], "users": []}, "modelRefs": []},
+    "status": {
+        "phase": "Active",
+        "conditions": [
+            {"type": "Ready", "status": "True"},
+            {"type": "SpecPriorityDuplicate", "status": "True"},
+        ],
+    },
+}
+
+_MODELREF = {
+    "metadata": {
+        "name": "facebook-opt-125m-simulated",
+        "namespace": "llm",
+        "annotations": {
+            "openshift.io/display-name": "Facebook OPT 125M (Simulated)",
+            "openshift.io/description": "CPU-only simulator for testing MaaS without a real LLM",
+        },
+    },
+    "spec": {"modelRef": {"kind": "LLMInferenceService", "name": "facebook-opt-125m-simulated"}},
+    "status": {
+        "phase": "Ready",
+        "conditions": [{"type": "Ready", "status": "True"}],
+        "endpoint": "https://maas.example.com/llm/facebook-opt-125m-simulated",
+    },
+}
+
+_LLM_ISVC = {
+    "spec": {
+        "replicas": 1,
+        "template": {
+            "containers": [
+                {"resources": {"requests": {"cpu": "100m"}, "limits": {"cpu": "500m"}}}
+            ]
+        },
+    },
+    "status": {"conditions": [{"type": "MainWorkloadReady", "status": "True"}]},
+}
+
+_REST_MODELS_RESPONSE = {
+    "data": [
+        {
+            "id": "facebook/opt-125m",
+            "owned_by": "llm/facebook-opt-125m-simulated",
+            "url": "https://maas.example.com/llm/facebook-opt-125m-simulated",
+            "ready": True,
+            "subscriptions": [
+                {"name": "simulator-free", "displayName": "Simulator Free Tier", "description": "..."}
+            ],
+        }
+    ]
+}
+
+
+def _mock_customobjects_api(list_result: dict | Exception, get_result: dict | None = None):
+    api = MagicMock()
+    if isinstance(list_result, Exception):
+        api.list_cluster_custom_object.side_effect = list_result
+    else:
+        api.list_cluster_custom_object.return_value = list_result
+    api.get_namespaced_custom_object.return_value = get_result
+    return api
+
+
+def test_list_subscriptions_shapes_fields() -> None:
+    api = _mock_customobjects_api({"items": [_SUBSCRIPTION_FREE]})
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_subscriptions()
+
+    assert result.available
+    sub = result.items[0]
+    assert sub["name"] == "simulator-free"
+    assert sub["display_name"] == "Simulator Free Tier"
+    assert sub["priority"] == 10
+    assert sub["ready"] is True
+    assert sub["priority_conflict"] is False
+    assert sub["owner"]["groups"] == ["system:authenticated"]
+    assert sub["models"][0]["token_rate_limits"] == [{"limit": 100, "window": "1m"}]
+    assert "simulator-free" in sub["raw_yaml"]
+    assert "priority: 10" in sub["raw_yaml"]
+
+
+def test_list_subscriptions_flags_priority_conflict() -> None:
+    api = _mock_customobjects_api({"items": [_SUBSCRIPTION_CONFLICTING]})
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_subscriptions()
+
+    assert result.items[0]["priority_conflict"] is True
+
+
+def test_list_subscriptions_forbidden_is_unavailable_not_raised() -> None:
+    api = _mock_customobjects_api(ApiException(status=403))
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_subscriptions()
+
+    assert result.available is False
+    assert result.reason == "forbidden"
+    assert result.items == []
+
+
+def test_list_subscriptions_crd_not_installed() -> None:
+    api = _mock_customobjects_api(ApiException(status=404))
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_subscriptions()
+
+    assert result.available is False
+    assert result.reason == "not_installed"
+
+
+def test_list_subscriptions_unreachable_cluster_is_unavailable() -> None:
+    """A connection-level failure (DNS/network/TLS) never even reaches the API
+    server, so it isn't an ApiException — must still degrade gracefully rather
+    than surface a raw urllib3 exception string to the UI."""
+    api = _mock_customobjects_api(ConnectionError("Name or service not known"))
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_subscriptions()
+
+    assert result.available is False
+    assert result.reason == "unreachable"
+
+
+def test_list_models_merges_modelref_llmisvc_and_rest(monkeypatch) -> None:
+    monkeypatch.setenv("MAAS_API_URL", "https://maas.example.com")
+    monkeypatch.setattr(maas_client, "sa_token", lambda: "test-token")
+
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "maasmodelrefs":
+            return {"items": [_MODELREF]}
+        if plural == "externalmodels":
+            return {"items": []}
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+    api.get_namespaced_custom_object.return_value = _LLM_ISVC
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"), \
+         patch("httpx.get") as mock_get:
+        mock_get.return_value = MagicMock(
+            json=lambda: _REST_MODELS_RESPONSE,
+            raise_for_status=lambda: None,
+        )
+        result = maas_client.list_models()
+
+    assert result.available
+    model = result.items[0]
+    assert model["name"] == "facebook-opt-125m-simulated"
+    assert model["kind"] == "LLMInferenceService"
+    assert model["hosting"] == "internal"
+    assert model["ready"] is True
+    assert model["subscriptions"] == [
+        {"name": "simulator-free", "display_name": "Simulator Free Tier", "description": "..."}
+    ]
+    assert model["serving"]["replicas"] == 1
+    assert "maasModelRef" in model["raw_yaml"]
+    assert "llmInferenceService" in model["raw_yaml"]
+
+
+def test_list_models_external_model_is_labeled_external() -> None:
+    external = {
+        "metadata": {
+            "name": "gpt-4o-proxy",
+            "namespace": "models-as-a-service",
+            "annotations": {"openshift.io/display-name": "GPT-4o (external)"},
+        },
+        "spec": {},
+        "status": {"phase": "Active"},
+    }
+    api = MagicMock()
+    api.list_cluster_custom_object.side_effect = lambda group, version, plural: (
+        {"items": [external]} if plural == "externalmodels" else {"items": []}
+    )
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"), \
+         patch("httpx.get", side_effect=Exception("no MAAS_API_URL in test env")):
+        result = maas_client.list_models()
+
+    assert result.available
+    model = result.items[0]
+    assert model["kind"] == "ExternalModel"
+    assert model["hosting"] == "external"
+    assert model["ready"] is False
+
+
+def test_list_models_survives_rest_call_failure(monkeypatch) -> None:
+    """The MaaS REST cross-reference is best-effort — if MAAS_API_URL/token
+    aren't usable, models still render (just without the subscriptions[] chip)."""
+    monkeypatch.delenv("MAAS_API_URL", raising=False)
+
+    api = MagicMock()
+    api.list_cluster_custom_object.side_effect = lambda group, version, plural: (
+        {"items": [_MODELREF]} if plural == "maasmodelrefs" else {"items": []}
+    )
+    api.get_namespaced_custom_object.return_value = _LLM_ISVC
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_models()
+
+    assert result.available
+    assert result.items[0]["subscriptions"] == []
+
+
+def test_list_models_forbidden_is_unavailable() -> None:
+    api = _mock_customobjects_api(ApiException(status=403))
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_models()
+
+    assert result.available is False
+    assert result.reason == "forbidden"
+
+
+def _subscription(name: str, group: str, model_name: str, model_namespace: str = "llm") -> dict:
+    return {
+        "metadata": {"name": name, "namespace": "models-as-a-service", "annotations": {}},
+        "spec": {
+            "priority": 10,
+            "owner": {"groups": [{"name": group}], "users": []},
+            "modelRefs": [{"name": model_name, "namespace": model_namespace, "tokenRateLimits": []}],
+        },
+        "status": {"phase": "Active", "conditions": [{"type": "Ready", "status": "True"}]},
+    }
+
+
+def _auth_policy(name: str, group: str, model_name: str, model_namespace: str = "llm") -> dict:
+    return {
+        "metadata": {"name": name, "namespace": "models-as-a-service", "annotations": {}},
+        "spec": {
+            "subjects": {"groups": [{"name": group}], "users": []},
+            "modelRefs": [{"name": model_name, "namespace": model_namespace}],
+        },
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+
+
+def _access_api(subscriptions: list[dict], auth_policies: list[dict], groups: list[dict] | Exception):
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "maassubscriptions":
+            return {"items": subscriptions}
+        if plural == "maasauthpolicies":
+            return {"items": auth_policies}
+        if plural == "groups":
+            if isinstance(groups, Exception):
+                raise groups
+            return {"items": groups}
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+    return api
+
+
+def test_list_access_flags_quota_without_access() -> None:
+    """A group has subscription quota for a model but no matching auth policy
+    — real misconfiguration: they have quota but can't reach the gateway."""
+    subs = [_subscription("sub-a", "team-a", "model-x")]
+    api = _access_api(subs, auth_policies=[], groups=[])
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_access()
+
+    assert result.available
+    row = next(r for r in result.items if r["name"] == "team-a")
+    assert row["quota_without_access"] == ["llm/model-x"]
+    assert row["access_without_quota"] == []
+
+
+def test_list_access_flags_access_without_quota() -> None:
+    """A group has an auth policy but no subscription — they can reach the
+    gateway but are rate-limited to zero by the cluster's default-deny policy."""
+    auth = [_auth_policy("ap-b", "team-b", "model-y")]
+    api = _access_api(subscriptions=[], auth_policies=auth, groups=[])
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_access()
+
+    row = next(r for r in result.items if r["name"] == "team-b")
+    assert row["access_without_quota"] == ["llm/model-y"]
+    assert row["quota_without_access"] == []
+
+
+def test_list_access_no_mismatch_when_matched() -> None:
+    subs = [_subscription("sub-a", "team-a", "model-x")]
+    auth = [_auth_policy("ap-a", "team-a", "model-x")]
+    api = _access_api(subs, auth, groups=[{"metadata": {"name": "team-a"}, "users": ["alice"]}])
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_access()
+
+    row = next(r for r in result.items if r["name"] == "team-a")
+    assert row["quota_without_access"] == []
+    assert row["access_without_quota"] == []
+    assert row["users"] == ["alice"]
+    assert "team-a" in row["raw_yaml"]
+    assert "sub-a" in row["subscriptions"][0]["raw_yaml"]
+    assert "ap-a" in row["auth_policies"][0]["raw_yaml"]
+
+
+def test_list_access_groups_unavailable_still_shows_names() -> None:
+    """Groups is a softer dependency than subscriptions/auth policies — its
+    absence shouldn't blank out the whole tab, just leave users unresolved."""
+    subs = [_subscription("sub-a", "team-a", "model-x")]
+    auth = [_auth_policy("ap-a", "team-a", "model-x")]
+    api = _access_api(subs, auth, groups=ApiException(status=403))
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_access()
+
+    assert result.available
+    row = next(r for r in result.items if r["name"] == "team-a")
+    assert row["users"] is None
+    assert row["raw_yaml"] is None
+
+
+def test_list_access_unavailable_when_auth_policies_unreadable() -> None:
+    """Subscriptions and auth policies are compared against each other, so
+    either being unreadable makes the whole comparison meaningless."""
+    subs = [_subscription("sub-a", "team-a", "model-x")]
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "maassubscriptions":
+            return {"items": subs}
+        if plural == "maasauthpolicies":
+            raise ApiException(status=403)
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_access()
+
+    assert result.available is False
+    assert result.reason == "forbidden"

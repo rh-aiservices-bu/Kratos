@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Modal, Spinner } from '@patternfly/react-core';
-import { CodeEditor, Language } from '@patternfly/react-code-editor';
-import '../monacoSetup';
+import { RawYamlModal } from './RawYamlModal';
 import { getRunConfig } from '../api/client';
 
 interface Props {
@@ -28,42 +26,13 @@ export function RunSettingsModal({ runId, onClose }: Props) {
   }, [runId]);
 
   return (
-    <Modal
-      isOpen
-      onClose={onClose}
-      aria-label="Run settings"
+    <RawYamlModal
       title="Run Settings"
-      variant="large"
-      actions={[
-        <Button key="close" variant="link" onClick={onClose}>
-          Close
-        </Button>,
-      ]}
-    >
-      {loading ? (
-        <Spinner size="md" aria-label="Loading settings" />
-      ) : yamlText ? (
-        // Mirrors OpenShift console's own "View YAML" — same underlying
-        // component family (PatternFly CodeEditor / Monaco), read-only here
-        // since this is a record of what already ran, not an editable form.
-        <CodeEditor
-          isReadOnly
-          isDarkTheme
-          isCopyEnabled
-          isDownloadEnabled
-          isLineNumbersVisible
-          language={Language.yaml}
-          code={yamlText}
-          height="480px"
-          downloadFileName={`${runId}.yaml`}
-          copyButtonToolTipText="Copy YAML"
-          copyButtonSuccessTooltipText="Copied!"
-        />
-      ) : (
-        <p style={{ color: '#888', fontStyle: 'italic' }}>
-          Settings aren't available yet — the run may not have started.
-        </p>
-      )}
-    </Modal>
+      downloadFileName={`${runId}.yaml`}
+      yamlText={yamlText}
+      loading={loading}
+      emptyMessage="Settings aren't available yet — the run may not have started."
+      onClose={onClose}
+    />
   );
 }

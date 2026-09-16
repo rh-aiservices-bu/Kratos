@@ -1,0 +1,50 @@
+# Grants the harness SA read-only visibility into the MaaS domain model
+# (subscriptions, models, access policies, tenant config) and the Kuadrant/
+# Limitador enforcement layer beneath it, for the "MaaS Setup" overview in
+# the UI. Cluster-scoped (not a namespaced Role) because the target
+# namespaces (e.g. models-as-a-service, llm) are install-specific and not
+# known ahead of time — same reasoning as rbac-monitoring.yaml's grant of
+# cluster-monitoring-view. get/list/watch only: this is introspection of
+# RHOAI's own resources, not a bypass of MaaS's own access controls.
+# See docs/architecture/adrs/ADR-017-maas-cluster-visibility.md.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kratos-maas-readonly
+rules:
+  - apiGroups: ["maas.opendatahub.io"]
+    resources:
+      - maassubscriptions
+      - maasmodelrefs
+      - maasauthpolicies
+      - tenants
+      - externalmodels
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kuadrant.io"]
+    resources: ["tokenratelimitpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["limitador.kuadrant.io"]
+    resources: ["limitadors"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["serving.kserve.io"]
+    resources: ["llminferenceservices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["user.openshift.io"]
+    resources: ["groups"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kratos-maas-readonly
+subjects:
+  - kind: ServiceAccount
+    name: kratos
+    namespace: kratos
+roleRef:
+  kind: ClusterRole
+  name: kratos-maas-readonly
+  apiGroup: rbac.authorization.k8s.io

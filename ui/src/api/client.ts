@@ -111,3 +111,112 @@ export async function getAssertions(runId: string): Promise<AssertionState[]> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// MaaS Setup — live cluster visibility (see ADR-017 /
+// docs/architecture/maas-domain-reference.md). Every endpoint here degrades
+// to { available: false, reason } instead of a 4xx/5xx when the SA lacks
+// RBAC for a given CRD or it isn't installed on this cluster — callers
+// should render an unavailable notice for that reason, not treat it as an error.
+// ---------------------------------------------------------------------------
+
+export interface MaasTokenRateLimit {
+  limit: number;
+  window: string;
+}
+
+export interface MaasSubscription {
+  name: string;
+  namespace: string;
+  display_name: string;
+  description: string;
+  priority: number | null;
+  owner: { groups: string[]; users: string[] };
+  models: { name: string; namespace: string; token_rate_limits: MaasTokenRateLimit[] }[];
+  phase: string | null;
+  ready: boolean;
+  priority_conflict: boolean;
+  raw: unknown;
+  raw_yaml: string;
+}
+
+export interface MaasModelSubscriptionRef {
+  name: string;
+  display_name: string | null;
+  description: string | null;
+}
+
+export interface MaasServingInfo {
+  replicas: number | null;
+  resources: unknown;
+  conditions: { type: string; status: string }[];
+}
+
+export interface MaasModel {
+  name: string;
+  namespace: string;
+  display_name: string;
+  description: string;
+  kind: string | null;
+  hosting: 'internal' | 'external';
+  backing_name: string | null;
+  phase: string | null;
+  ready: boolean;
+  endpoint: string | null;
+  subscriptions: MaasModelSubscriptionRef[];
+  serving: MaasServingInfo | null;
+  raw: unknown;
+  raw_yaml: string;
+}
+
+export interface MaasAccessSubscriptionRef {
+  name: string;
+  display_name: string;
+  priority: number | null;
+  raw_yaml: string;
+}
+
+export interface MaasAccessPolicyRef {
+  name: string;
+  display_name: string;
+  ready: boolean;
+  raw_yaml: string;
+}
+
+export interface MaasAccessRow {
+  name: string;
+  users: string[] | null;
+  raw_yaml: string | null;
+  subscriptions: MaasAccessSubscriptionRef[];
+  auth_policies: MaasAccessPolicyRef[];
+  quota_without_access: string[];
+  access_without_quota: string[];
+}
+
+export interface MaasSectionResult<T> {
+  available: boolean;
+  reason: string | null;
+  items: T[];
+}
+
+async function fetchMaasSection<T>(path: string): Promise<MaasSectionResult<T>> {
+  try {
+    const r = await fetch(path);
+    if (!r.ok) return { available: false, reason: `http_${r.status}`, items: [] };
+    return (await r.json()) as MaasSectionResult<T>;
+  } catch {
+    return { available: false, reason: 'network_error', items: [] };
+  }
+}
+
+export function getMaasSubscriptions(): Promise<MaasSectionResult<MaasSubscription>> {
+  return fetchMaasSection('/api/maas/subscriptions');
+}
+
+export function getMaasModels(): Promise<MaasSectionResult<MaasModel>> {
+  return fetchMaasSection('/api/maas/models');
+}
+
+export function getMaasAccess(): Promise<MaasSectionResult<MaasAccessRow>> {
+  return fetchMaasSection('/api/maas/access');
+}
+
