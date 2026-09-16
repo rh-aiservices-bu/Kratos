@@ -5,20 +5,12 @@ config:
   concurrency: 10
   prompt: "Hello, world!"
   metrics_tolerance_pct: 5
-  # How long the runner will keep re-polling MaaS metrics after the run finishes,
-  # waiting for a fresh Prometheus scrape to actually reflect the sent traffic,
-  # before evaluating maas_requests_match/maas_tokens_match. Default (see
-  # harness/runner.py) assumes a ~30s scrape interval; raise this if your cluster's
-  # is longer or scrapes are less reliable under load.
+  # Max wait for a fresh Prometheus scrape before settling maas_*_match (ADR-014).
   metrics_max_wait_s: 65
-  # Kuadrant/Limitador scopes its gateway counters by the target model's HTTPRoute
-  # name — verified live against cluster-rkmhx.rkmhx.sandbox1230.opentlc.com (see
-  # ADR-014). Update this if DEFAULT_MODEL ever changes.
+  # Limitador's gateway counters are scoped by the target model's HTTPRoute name (ADR-014).
   limitador_namespace: "llm/facebook-opt-125m-simulated-kserve-route"
-# Named PromQL queries this scenario depends on — baseline-snapshotted before the
-# task loop starts and re-polled every 5s, same as before ADR-015, just declared
-# here instead of the global ConfigMap's MAAS_METRICS_QUERIES so the query text
-# lives next to the assertions that use it. Referenced below via ${baseline.<name>}.
+# Named PromQL queries (ADR-015), baseline-snapshotted before the task loop and
+# re-polled every 5s. Referenced below via ${baseline.<name>}.
 metrics_queries:
   total_requests: 'sum(authorized_calls{limitador_namespace="${config.limitador_namespace}"})'
   total_tokens: 'sum(authorized_hits{limitador_namespace="${config.limitador_namespace}"})'
@@ -36,17 +28,11 @@ tasks:
       error_rate_pct:
         promql: "${harness.inference_results.error_rate_pct}"
         expect: "< 5"
-      # Self-contained PromQL cross-check (ADR-015): ${baseline.total_requests} nets
-      # out the pre-run counter value and ${harness.inference_results.total_requests}
-      # splices in the harness's own sent-count, so the whole "does MaaS's reported
-      # delta match what we actually sent, within tolerance" check is one expression
-      # evaluated by Prometheus itself, using <bool> to fold the comparison into 0/1.
+      # Self-contained PromQL cross-check (ADR-015): does MaaS's reported delta
+      # match what the harness actually sent, within tolerance.
       maas_requests_match:
-        # clamp_min(v instant-vector, min scalar) requires its first argument to be
-        # an instant vector — ${harness.x} substitutes to a bare number (scalar),
-        # which Thanos rejects with a 400 ("expected type instant vector... got
-        # scalar", confirmed live). vector(...) converts the scalar into a
-        # (labelless) instant vector first, which clamp_min then accepts.
+        # vector(...) wraps the ${harness.x} scalar as an instant vector, since
+        # clamp_min requires one (Thanos rejects a bare scalar).
         promql: >-
           abs(
             (sum(authorized_calls{limitador_namespace="${config.limitador_namespace}"}) - ${baseline.total_requests})

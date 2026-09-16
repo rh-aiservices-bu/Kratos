@@ -65,6 +65,7 @@ def create_job(scenario: str, run_id: str, config_overrides: dict | None = None)
             k8s.V1Container(
                 name="harness",
                 image=IMAGE,
+                image_pull_policy="Always",
                 command=["python", "-m", "harness.main"],
                 args=[
                     "--scenario",
@@ -78,7 +79,10 @@ def create_job(scenario: str, run_id: str, config_overrides: dict | None = None)
                         config_map_ref=k8s.V1ConfigMapEnvSource(name=_GLOBAL_CM)
                     )
                 ],
-                volume_mounts=[k8s.V1VolumeMount(name="data", mount_path="/data")],
+                volume_mounts=[
+                    k8s.V1VolumeMount(name="data", mount_path="/data"),
+                    k8s.V1VolumeMount(name="scenarios", mount_path="/app/scenarios"),
+                ],
             )
         ],
         volumes=[
@@ -87,7 +91,11 @@ def create_job(scenario: str, run_id: str, config_overrides: dict | None = None)
                 persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
                     claim_name="kratos-data"
                 ),
-            )
+            ),
+            k8s.V1Volume(
+                name="scenarios",
+                config_map=k8s.V1ConfigMapVolumeSource(name="kratos-scenarios"),
+            ),
         ],
     )
 

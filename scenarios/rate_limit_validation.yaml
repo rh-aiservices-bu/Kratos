@@ -20,7 +20,7 @@ tasks:
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
       key_pool: true
-    # promql pass-through form (ADR-015) — see single_key_load.yaml for why.
+    # promql pass-through form (ADR-015) — see single_key_load.yaml.
     assertions:
       throughput_rps:
         promql: "${harness.inference_results.throughput_rps}"

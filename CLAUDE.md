@@ -113,11 +113,9 @@ kratos/
 │   ├── rbac-monitoring.yaml    # ClusterRoleBinding: SA -> cluster-monitoring-view (Thanos Querier access)
 │   ├── pvc.yaml                # PVC for SQLite DB + run results
 │   ├── configmap-global.yaml   # Global cluster config (MAAS_API_URL, etc.)
-│   ├── configmap-scenarios.yaml# Scenario YAML files
 │   ├── deployment.yaml         # API server Deployment
 │   ├── service.yaml            # ClusterIP Service
-│   ├── route.yaml              # OpenShift Route (TLS edge termination)
-│   └── kustomization.yaml      # oc apply -k deploy/
+│   └── route.yaml              # OpenShift Route (TLS edge termination)
 │
 ├── docs/
 │   ├── architecture/
@@ -128,6 +126,7 @@ kratos/
 │
 ├── Dockerfile                  # Multi-stage: Node (UI build) → Python (API + harness)
 ├── Makefile                    # build, push, deploy, dev, test, lint
+├── kustomization.yaml          # oc apply -k . — deploy/ resources + generates kratos-scenarios ConfigMap from scenarios/*.yaml (configMapGenerator; root-level so kustomize's file-load restriction allows referencing both deploy/ and scenarios/)
 ├── pyproject.toml              # Python deps: fastapi, uvicorn, kubernetes, aiosqlite, httpx, openai
 └── README.md
 ```
@@ -384,6 +383,6 @@ See [`docs/project/implementation-plan.md`](docs/project/implementation-plan.md)
 2. **Local harness**: `python -m harness.main --scenario single_key_load --run-id test-123` (needs real MaaS cluster env vars)
 3. **Local dev**: `make dev` — starts FastAPI dev server + Vite dev server; open browser, verify scenario list loads and assertion panel renders
 4. **Build**: `make build` — multi-stage Docker build (Node UI build → Python image)
-5. **End-to-end**: `make deploy` (`oc apply -k deploy/`) → open Route URL → pick scenario → edit config overrides in modal → start run → confirm task pipeline chips appear within ~2 s and update (RUNNING with progress bar → DONE green) → confirm logs stream and scroll smartly (scroll up to see "N new lines" badge) → confirm assertion panel updates independently → navigate away and back (browser back button should work via URL hash) → verify results in history → verify no leftover `kratos-*` MaaS API keys → verify `MaaSSubscription` CR state restored after `rate_limit_validation`
+5. **End-to-end**: `make deploy` (`oc apply -k .`) → open Route URL → pick scenario → edit config overrides in modal → start run → confirm task pipeline chips appear within ~2 s and update (RUNNING with progress bar → DONE green) → confirm logs stream and scroll smartly (scroll up to see "N new lines" badge) → confirm assertion panel updates independently → navigate away and back (browser back button should work via URL hash) → verify results in history → verify no leftover `kratos-*` MaaS API keys → verify `MaaSSubscription` CR state restored after `rate_limit_validation`
 6. **MaaS metrics cross-check specifically**: run `metrics_fill` (needs `MAAS_METRICS_URL` set and `deploy/rbac-monitoring.yaml` applied — the scenario's own `metrics_queries:` block supplies the PromQL) → confirm `maas_requests_match`/`maas_tokens_match` go PASSING, not just `error_rate_pct` — these only appear on `metrics_fill`'s run page, not on other scenarios' (they aren't in those scenarios' `assertions:` blocks) — while settling, `send_requests`'s progress bar should stay visible the whole time rather than disappearing and popping back at the end. The `clamp_min(vector(...), 1)` fix has been confirmed valid against a live Thanos Querier directly (`cluster-rkmhx.rkmhx.sandbox1230.opentlc.com`) but not yet re-verified via an actual end-to-end scenario run.
 7. **Runtime display / view settings / stop, specifically**: start a `single_key_load` run with a large `request_count` → confirm total and per-task elapsed time visibly tick up once a second in the UI while `RUNNING`, and freeze to a sensible final value once the run completes (matching `RunHistory`'s Duration column) → click "View Settings" mid-run and confirm the YAML shown matches what was actually configured, including any launch-modal edits, with no raw secrets/tokens visible (should show `***REDACTED***`) → click "Stop" mid-run on a scenario that provisions API keys (e.g. `multi_key_load`) → confirm the run reaches `CANCELLED` (not stuck `RUNNING`, not `FAIL`) within `_STOP_GRACE_PERIOD_S`, and verify via the MaaS API / `oc` that no `kratos-*` keys were left behind (needs `deploy/rbac.yaml`'s `delete` verb on `pods` applied).

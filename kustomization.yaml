@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: kratos
+
+resources:
+  - deploy/serviceaccount.yaml
+  - deploy/rbac.yaml
+  - deploy/rbac-monitoring.yaml
+  - deploy/pvc.yaml
+  - deploy/configmap-global.yaml
+  - deploy/deployment.yaml
+  - deploy/service.yaml
+  - deploy/route.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: kratos-scenarios
+    files:
+      - scenarios/single_key_load.yaml
+      - scenarios/multi_key_load.yaml
+      - scenarios/direct_inference.yaml
+      - scenarios/rate_limit_validation.yaml
+      - scenarios/metrics_fill.yaml

@@ -334,7 +334,7 @@ Manual browser checks:
 1. `node-builder` stage — installs npm deps, runs `npm run build`, outputs `ui/dist/`
 2. Final stage — copies `ui/dist/` + Python source; default CMD is `uvicorn api.main:app`
 
-**Deploy manifests** (`deploy/`): `serviceaccount.yaml`, `rbac.yaml`, `pvc.yaml`, `configmap-global.yaml`, `configmap-scenarios.yaml`, `deployment.yaml`, `service.yaml`, `route.yaml`, `kustomization.yaml`
+**Deploy manifests** (`deploy/`): `serviceaccount.yaml`, `rbac.yaml`, `pvc.yaml`, `configmap-global.yaml`, `deployment.yaml`, `service.yaml`, `route.yaml`; plus a repo-root `kustomization.yaml` (`oc apply -k .`) that also generates the `kratos-scenarios` ConfigMap from `scenarios/*.yaml` via `configMapGenerator` — it lives at the repo root rather than inside `deploy/` because kustomize's file-load security restriction only allows a `configMapGenerator` to reference files at or below the kustomization's own directory
 
 **Makefile** — finalised targets: `build`, `push`, `deploy`, `dev`, `test`, `lint`
 

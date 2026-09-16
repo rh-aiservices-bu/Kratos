@@ -19,7 +19,7 @@ push: build
 	podman push $(IMAGE)
 
 deploy:
-	oc apply -k deploy/
+	oc apply -k .
 
 dev:
 	@echo "Starting FastAPI dev server on :8000 and Vite dev server on :5173..."
