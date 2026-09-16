@@ -35,6 +35,13 @@ _DSC_GROUP = "datasciencecluster.opendatahub.io"
 _DSC_VERSION = "v2"
 _ODH_DASHBOARD_GROUP = "opendatahub.io"
 _ODH_DASHBOARD_VERSION = "v1alpha"
+# RHOAI 3.5+ moved ExternalModel out of maas.opendatahub.io into its own group,
+# split into ExternalProvider (endpoint/auth) + ExternalModel (references a
+# provider) — see docs/architecture/maas-domain-reference.md Catalog item B.
+# This targets 3.5+ only; a 3.4 cluster's ExternalModel (maas.opendatahub.io/v1alpha1,
+# single CRD) is not read here.
+_INFERENCE_GROUP = "inference.opendatahub.io"
+_INFERENCE_VERSION = "v1alpha1"
 _SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
 # Required on a model's namespace for the Gateway to accept HTTPRoutes from
@@ -42,6 +49,12 @@ _SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 # (https://rh-aiservices-bu.github.io/rhoai-maas-guide/). Applies to internal
 # (LLMInferenceService) and external (ExternalModel) model namespaces alike.
 _GATEWAY_ACCESS_LABEL = "maas.opendatahub.io/gateway-access"
+
+# Required on the credential Secret an ExternalProvider's spec.auth.secretRef
+# points to, so the gateway's wasm-shim can find and inject it (RHOAI 3.5+;
+# see the community guide's external-models page). Never read the Secret's
+# contents — existence + this label is all `_secret_has_label` checks.
+_CREDENTIAL_SECRET_LABEL = "inference.llm-d.ai/ipp-managed"
 
 _kube_loaded = False
 
@@ -136,6 +149,24 @@ def _namespace_has_gateway_access_label(name: str) -> bool | None:
         return None
 
 
+def _secret_has_label(namespace: str, name: str, label: str) -> bool | None:
+    """Whether a named Secret carries `label=true`. Only ever `get`s one
+    specific, already-known secret name (never lists/enumerates secrets in a
+    namespace) and only ever inspects `.metadata.labels` — the Secret's
+    `data`/`stringData` is never read or exposed. Returns None (not False)
+    when the secret can't be read at all, same convention as
+    `_namespace_has_gateway_access_label`.
+    """
+    _kube()
+    api = k8s.CoreV1Api()
+    try:
+        secret = api.read_namespaced_secret(name, namespace)
+        labels = secret.metadata.labels or {}
+        return labels.get(label) == "true"
+    except Exception:
+        return None
+
+
 def _condition(conditions: list[dict], cond_type: str) -> dict | None:
     for c in conditions or []:
         if c.get("type") == cond_type:
@@ -221,7 +252,13 @@ def _fetch_v1_models() -> tuple[bool, list[dict]]:
 
 def list_models() -> ResourceList:
     modelrefs_result = _list(_MAAS_GROUP, _MAAS_VERSION, "maasmodelrefs")
-    externalmodels_result = _list(_MAAS_GROUP, _MAAS_VERSION, "externalmodels")
+    externalmodels_result = _list(_INFERENCE_GROUP, _INFERENCE_VERSION, "externalmodels")
+    externalproviders_result = _list(_INFERENCE_GROUP, _INFERENCE_VERSION, "externalproviders")
+    providers_by_key = (
+        {(p.get("metadata", {}).get("namespace"), p.get("metadata", {}).get("name")): p
+         for p in externalproviders_result.items}
+        if externalproviders_result.available else {}
+    )
 
     if not modelrefs_result.available and not externalmodels_result.available:
         # Neither readable — report the MaaSModelRef reason since that's the
@@ -319,6 +356,7 @@ def list_models() -> ResourceList:
                     if auth_covered_models is not None else None
                 ),
                 "gateway_access_label": _gateway_access_for(namespace),
+                "external_providers": [],
                 "serving": serving,
                 "raw": cr,
                 "raw_yaml": _to_yaml(yaml_doc),
@@ -327,8 +365,45 @@ def list_models() -> ResourceList:
 
     for cr in externalmodels_result.items if externalmodels_result.available else []:
         meta = cr.get("metadata", {})
+        spec = cr.get("spec", {})
+        status = cr.get("status", {})
         annotations = meta.get("annotations", {})
         name, namespace = meta.get("name"), meta.get("namespace")
+
+        resolved_providers = []
+        referenced_provider_crs = []
+        for pref in spec.get("externalProviderRefs") or []:
+            ref = pref.get("ref", {})
+            provider_name = ref.get("name")
+            # The guide's examples always co-locate ExternalProvider and
+            # ExternalModel; `ref` carries no namespace field of its own, so
+            # same-namespace is the only resolution rule there is to follow.
+            provider_cr = providers_by_key.get((namespace, provider_name))
+            provider_spec = (provider_cr or {}).get("spec", {})
+            secret_ref = provider_spec.get("auth", {}).get("secretRef", {})
+            secret_name = secret_ref.get("name")
+            secret_label_ok = (
+                _secret_has_label(namespace, secret_name, _CREDENTIAL_SECRET_LABEL)
+                if secret_name else None
+            )
+            if provider_cr is not None:
+                referenced_provider_crs.append(provider_cr)
+            resolved_providers.append(
+                {
+                    "provider_name": provider_name,
+                    "target_model": pref.get("targetModel"),
+                    "api_format": pref.get("apiFormat"),
+                    "path": pref.get("path"),
+                    "endpoint": provider_spec.get("endpoint"),
+                    "credential_secret_name": secret_name,
+                    "credential_secret_label_ok": secret_label_ok,
+                }
+            )
+
+        yaml_doc = {"externalModel": cr}
+        if referenced_provider_crs:
+            yaml_doc["externalProviders"] = referenced_provider_crs
+
         shaped.append(
             {
                 "name": name,
@@ -337,18 +412,58 @@ def list_models() -> ResourceList:
                 "description": annotations.get("openshift.io/description", ""),
                 "kind": "ExternalModel",
                 "hosting": "external",
-                "backing_name": None,
-                "phase": cr.get("status", {}).get("phase"),
-                "ready": False,
-                "endpoint": None,
+                "backing_name": spec.get("modelName"),
+                "phase": status.get("phase"),
+                "ready": _is_ready(status.get("conditions", [])),
+                "endpoint": resolved_providers[0]["endpoint"] if resolved_providers else None,
                 "subscriptions": [],
                 "has_auth_policy": (
                     (namespace, name) in auth_covered_models
                     if auth_covered_models is not None else None
                 ),
                 "gateway_access_label": _gateway_access_for(namespace),
+                "external_providers": resolved_providers,
                 "serving": None,
                 "raw": cr,
+                "raw_yaml": _to_yaml(yaml_doc),
+            }
+        )
+
+    return ResourceList(available=True, items=shaped)
+
+
+def list_auth_policies() -> ResourceList:
+    """`MaaSAuthPolicy` — grants gateway access (separate from subscription
+    quota). Shaped to mirror `list_subscriptions()` (`owner.{groups,users}`,
+    per-model `models[]`) so the two can be compared model-by-model the same
+    way — see Catalog item C and `resolve_access()`, which is exactly that
+    comparison for a candidate set of groups.
+    """
+    result = _list(_MAAS_GROUP, _MAAS_VERSION, "maasauthpolicies")
+    if not result.available:
+        return result
+
+    shaped = []
+    for cr in result.items:
+        meta = cr.get("metadata", {})
+        spec = cr.get("spec", {})
+        status = cr.get("status", {})
+        annotations = meta.get("annotations", {})
+        subjects = spec.get("subjects", {})
+        shaped.append(
+            {
+                "name": meta.get("name"),
+                "namespace": meta.get("namespace"),
+                "display_name": annotations.get("openshift.io/display-name", meta.get("name")),
+                "owner": {
+                    "groups": [g.get("name") for g in (subjects.get("groups") or [])],
+                    "users": subjects.get("users") or [],
+                },
+                "models": [
+                    {"name": m.get("name"), "namespace": m.get("namespace")}
+                    for m in (spec.get("modelRefs") or [])
+                ],
+                "ready": _is_ready(status.get("conditions", [])),
                 "raw_yaml": _to_yaml(cr),
             }
         )
@@ -373,7 +488,7 @@ def list_access() -> ResourceList:
     if not subs.available:
         return subs
 
-    auth = _list(_MAAS_GROUP, _MAAS_VERSION, "maasauthpolicies")
+    auth = list_auth_policies()
     if not auth.available:
         return auth
 
@@ -388,26 +503,10 @@ def list_access() -> ResourceList:
             g.get("metadata", {}).get("name"): _to_yaml(g) for g in groups.items
         }
 
-    shaped_auth = []
-    for cr in auth.items:
-        meta = cr.get("metadata", {})
-        spec = cr.get("spec", {})
-        status = cr.get("status", {})
-        annotations = meta.get("annotations", {})
-        subjects = spec.get("subjects", {})
-        shaped_auth.append(
-            {
-                "name": meta.get("name"),
-                "display_name": annotations.get("openshift.io/display-name", meta.get("name")),
-                "groups": [g.get("name") for g in (subjects.get("groups") or [])],
-                "users": subjects.get("users") or [],
-                "models": [
-                    (m.get("namespace"), m.get("name")) for m in (spec.get("modelRefs") or [])
-                ],
-                "ready": _is_ready(status.get("conditions", [])),
-                "raw_yaml": _to_yaml(cr),
-            }
-        )
+    shaped_auth = [
+        {**a, "groups": a["owner"]["groups"], "models": [(m["namespace"], m["name"]) for m in a["models"]]}
+        for a in auth.items
+    ]
 
     group_names: set[str] = set()
     for sub in subs.items:
@@ -653,5 +752,3 @@ def list_platform() -> dict:
         "data_science_cluster": {"available": dsc.available, "reason": dsc.reason, "item": dsc_item},
         "odh_dashboard_config": {"available": odh.available, "reason": odh.reason, "item": odh_item},
     }
-
-    return ResourceList(available=True, items=rows)

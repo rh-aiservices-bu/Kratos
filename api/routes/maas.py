@@ -22,6 +22,7 @@ async def get_maas_status() -> dict:
     subscriptions = maas_client.list_subscriptions()
     models = maas_client.list_models()
     access = maas_client.list_access()
+    auth_policies = maas_client.list_auth_policies()
     rate_limit_policies = maas_client.list_rate_limit_policies()
     limitador = maas_client.list_limitador()
     gateways = maas_client.list_gateways()
@@ -32,6 +33,7 @@ async def get_maas_status() -> dict:
             "subscriptions": _section(subscriptions),
             "models": _section(models),
             "access": _section(access),
+            "auth_policies": _section(auth_policies),
             "rate_limit_policies": _section(rate_limit_policies),
             "limitador": _section(limitador),
             "gateways": _section(gateways),
@@ -65,6 +67,11 @@ async def get_models() -> dict:
 @router.get("/api/maas/access")
 async def get_access() -> dict:
     return _items_response(maas_client.list_access())
+
+
+@router.get("/api/maas/auth-policies")
+async def get_auth_policies() -> dict:
+    return _items_response(maas_client.list_auth_policies())
 
 
 @router.get("/api/maas/rate-limit-policies")

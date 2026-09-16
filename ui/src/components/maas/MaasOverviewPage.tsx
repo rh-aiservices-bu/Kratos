@@ -1,13 +1,21 @@
 import { useState } from 'react';
 import { Page, PageSection, Tab, Tabs, TabTitleText } from '@patternfly/react-core';
 import { AccessControlTab } from './AccessControlTab';
+import { AccessSimulatorTab } from './AccessSimulatorTab';
 import { ModelsTab } from './ModelsTab';
 import { NetworkingTab } from './NetworkingTab';
 import { PlatformConfigTab } from './PlatformConfigTab';
 import { RateLimitingTab } from './RateLimitingTab';
 import { SubscriptionsTab } from './SubscriptionsTab';
 
-type TabKey = 'subscriptions' | 'models' | 'access' | 'rate-limiting' | 'networking' | 'platform';
+type TabKey =
+  | 'subscriptions'
+  | 'models'
+  | 'access'
+  | 'access-simulator'
+  | 'rate-limiting'
+  | 'networking'
+  | 'platform';
 
 export function MaasOverviewPage() {
   const [activeTab, setActiveTab] = useState<TabKey>('subscriptions');
@@ -34,6 +42,11 @@ export function MaasOverviewPage() {
           <Tab eventKey="access" title={<TabTitleText>Access Control</TabTitleText>}>
             <div style={{ marginTop: '1rem' }}>
               <AccessControlTab />
+            </div>
+          </Tab>
+          <Tab eventKey="access-simulator" title={<TabTitleText>Access Simulator</TabTitleText>}>
+            <div style={{ marginTop: '1rem' }}>
+              <AccessSimulatorTab />
             </div>
           </Tab>
           <Tab eventKey="rate-limiting" title={<TabTitleText>Rate Limiting</TabTitleText>}>

@@ -66,6 +66,15 @@ async def test_access_available(client) -> None:
     assert resp.json()["items"] == [{"name": "team-a"}]
 
 
+async def test_auth_policies_available(client) -> None:
+    fake = maas_client.ResourceList(available=True, items=[{"name": "ap-a"}])
+    with patch.object(maas_client, "list_auth_policies", return_value=fake):
+        resp = await client.get("/api/maas/auth-policies")
+
+    assert resp.status_code == 200
+    assert resp.json()["items"] == [{"name": "ap-a"}]
+
+
 async def test_rate_limit_policies_available(client) -> None:
     fake = maas_client.ResourceList(available=True, items=[{"name": "maas-trlp-x"}])
     with patch.object(maas_client, "list_rate_limit_policies", return_value=fake):
@@ -131,6 +140,7 @@ async def test_status_reports_per_section_availability(client) -> None:
     subs = maas_client.ResourceList(available=False, reason="forbidden")
     models = maas_client.ResourceList(available=True, items=[])
     access = maas_client.ResourceList(available=False, reason="forbidden")
+    auth_policies = maas_client.ResourceList(available=True, items=[])
     rate_limit_policies = maas_client.ResourceList(available=True, items=[])
     limitador = maas_client.ResourceList(available=True, items=[])
     gateways = maas_client.ResourceList(available=True, items=[])
@@ -140,6 +150,7 @@ async def test_status_reports_per_section_availability(client) -> None:
     with patch.object(maas_client, "list_subscriptions", return_value=subs), \
          patch.object(maas_client, "list_models", return_value=models), \
          patch.object(maas_client, "list_access", return_value=access), \
+         patch.object(maas_client, "list_auth_policies", return_value=auth_policies), \
          patch.object(maas_client, "list_rate_limit_policies", return_value=rate_limit_policies), \
          patch.object(maas_client, "list_limitador", return_value=limitador), \
          patch.object(maas_client, "list_gateways", return_value=gateways), \
@@ -152,6 +163,7 @@ async def test_status_reports_per_section_availability(client) -> None:
     assert sections["subscriptions"] == {"available": False, "reason": "forbidden"}
     assert sections["models"] == {"available": True, "reason": None}
     assert sections["access"] == {"available": False, "reason": "forbidden"}
+    assert sections["auth_policies"] == {"available": True, "reason": None}
     assert sections["rate_limit_policies"] == {"available": True, "reason": None}
     assert sections["limitador"] == {"available": True, "reason": None}
     assert sections["gateways"] == {"available": True, "reason": None}

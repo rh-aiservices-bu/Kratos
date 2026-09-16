@@ -8,6 +8,7 @@ resources:
   - deploy/rbac.yaml
   - deploy/rbac-monitoring.yaml
   - deploy/rbac-maas-readonly.yaml
+  - deploy/rbac-maas-subscription-write.yaml
   - deploy/pvc.yaml
   - deploy/configmap-global.yaml
   - deploy/deployment.yaml

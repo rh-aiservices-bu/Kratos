@@ -23,7 +23,13 @@ rules:
       - maasmodelrefs
       - maasauthpolicies
       - tenants
-      - externalmodels
+    verbs: ["get", "list", "watch"]
+  # RHOAI 3.5+: ExternalModel/ExternalProvider live under this group instead
+  # of maas.opendatahub.io (see docs/architecture/maas-domain-reference.md
+  # Catalog item B). Targets 3.5+ only — a 3.4 cluster's ExternalModel isn't
+  # read by this version of Kratos.
+  - apiGroups: ["inference.opendatahub.io"]
+    resources: ["externalmodels", "externalproviders"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["kuadrant.io"]
     resources: ["tokenratelimitpolicies"]
@@ -49,6 +55,13 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list", "watch"]
+  # `get` only, deliberately no `list`/`watch`: Kratos only ever reads one
+  # specific, already-known Secret name (an ExternalProvider's
+  # spec.auth.secretRef) to check its labels — it never enumerates every
+  # Secret in a namespace, and never reads .data/.stringData.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

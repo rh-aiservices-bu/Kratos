@@ -32,6 +32,7 @@ const baseModel: MaasModel = {
   ],
   has_auth_policy: true,
   gateway_access_label: true,
+  external_providers: [],
   serving: { replicas: 1, resources: null, conditions: [] },
   raw: {},
   raw_yaml: 'maasModelRef:\n  kind: MaaSModelRef\n',
@@ -108,6 +109,85 @@ test('shows an External badge for externally-hosted models', async () => {
 
   expect(await screen.findByText('External')).toBeInTheDocument();
   expect(screen.getByText('ExternalModel')).toBeInTheDocument();
+});
+
+test('flags a correctly-labeled external provider credential secret', async () => {
+  const external: MaasModel = {
+    ...baseModel,
+    name: 'gpt-4o-proxy',
+    display_name: 'GPT-4o (external)',
+    kind: 'ExternalModel',
+    hosting: 'external',
+    serving: null,
+    external_providers: [
+      {
+        provider_name: 'openai',
+        target_model: 'gpt-4o-mini',
+        api_format: 'openai-chat',
+        path: '/v1/chat/completions',
+        endpoint: 'api.openai.com',
+        credential_secret_name: 'openai-api-key',
+        credential_secret_label_ok: true,
+      },
+    ],
+  };
+  mockGetModels.mockResolvedValue({ available: true, reason: null, items: [external] });
+
+  render(<ModelsTab />);
+
+  expect(await screen.findByText('openai')).toBeInTheDocument();
+  expect(screen.getByText(/gpt-4o-mini/)).toBeInTheDocument();
+  expect(screen.getByText('✓ credential secret labeled')).toBeInTheDocument();
+});
+
+test('flags an external provider whose credential secret is missing the required label', async () => {
+  const external: MaasModel = {
+    ...baseModel,
+    name: 'gpt-4o-proxy',
+    hosting: 'external',
+    serving: null,
+    external_providers: [
+      {
+        provider_name: 'openai',
+        target_model: 'gpt-4o-mini',
+        api_format: null,
+        path: null,
+        endpoint: null,
+        credential_secret_name: 'openai-api-key',
+        credential_secret_label_ok: false,
+      },
+    ],
+  };
+  mockGetModels.mockResolvedValue({ available: true, reason: null, items: [external] });
+
+  render(<ModelsTab />);
+
+  expect(await screen.findByText('⚠ credential secret missing label')).toBeInTheDocument();
+});
+
+test('shows unknown when the credential secret cannot be read', async () => {
+  const external: MaasModel = {
+    ...baseModel,
+    name: 'gpt-4o-proxy',
+    hosting: 'external',
+    serving: null,
+    external_providers: [
+      {
+        provider_name: 'openai',
+        target_model: 'gpt-4o-mini',
+        api_format: null,
+        path: null,
+        endpoint: null,
+        credential_secret_name: 'openai-api-key',
+        credential_secret_label_ok: null,
+      },
+    ],
+  };
+  mockGetModels.mockResolvedValue({ available: true, reason: null, items: [external] });
+
+  render(<ModelsTab />);
+
+  expect(await screen.findByText('credential secret: unknown')).toBeInTheDocument();
 });
 
 test('shows an empty-state message when there are no models', async () => {

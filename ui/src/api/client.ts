@@ -151,6 +151,17 @@ export interface MaasServingInfo {
   conditions: { type: string; status: string }[];
 }
 
+export interface MaasExternalProviderRef {
+  provider_name: string | null;
+  target_model: string | null;
+  api_format: string | null;
+  path: string | null;
+  endpoint: string | null;
+  credential_secret_name: string | null;
+  // null means "couldn't read the secret" — never collapse into false.
+  credential_secret_label_ok: boolean | null;
+}
+
 export interface MaasModel {
   name: string;
   namespace: string;
@@ -166,8 +177,19 @@ export interface MaasModel {
   // null means "couldn't tell" (RBAC/read failure) — never collapse into false.
   has_auth_policy: boolean | null;
   gateway_access_label: boolean | null;
+  external_providers: MaasExternalProviderRef[];
   serving: MaasServingInfo | null;
   raw: unknown;
+  raw_yaml: string;
+}
+
+export interface MaasAuthPolicy {
+  name: string;
+  namespace: string;
+  display_name: string;
+  owner: { groups: string[]; users: string[] };
+  models: { name: string; namespace: string }[];
+  ready: boolean;
   raw_yaml: string;
 }
 
@@ -297,6 +319,10 @@ export function getMaasModels(): Promise<MaasSectionResult<MaasModel>> {
 
 export function getMaasAccess(): Promise<MaasSectionResult<MaasAccessRow>> {
   return fetchMaasSection('/api/maas/access');
+}
+
+export function getMaasAuthPolicies(): Promise<MaasSectionResult<MaasAuthPolicy>> {
+  return fetchMaasSection('/api/maas/auth-policies');
 }
 
 export function getMaasRateLimitPolicies(): Promise<MaasSectionResult<MaasTokenRateLimitPolicy>> {

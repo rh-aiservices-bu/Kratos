@@ -1,6 +1,8 @@
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from harness.tasks.base import TaskContext
 from harness.tasks.inference import SendRequestsTask, _distribute, _percentiles
 
@@ -73,6 +75,14 @@ async def test_send_requests_accumulates_token_usage() -> None:
     assert ir["total_tokens_sent"] == 90
     assert ir["prompt_tokens_sent"] == 30
     assert ir["completion_tokens_sent"] == 60
+    # Same elapsed denominator as throughput_rps — see rate_limit_validation.yaml
+    # (ADR-009's Update) for why this exists: MaaSSubscription rate limits are
+    # token-based, not request-based, so an "is throughput under the limit"
+    # assertion needs a token-denominated metric to compare against.
+    assert ir["token_throughput_per_sec"] >= 0
+    assert ir["token_throughput_per_sec"] == pytest.approx(
+        ir["total_tokens_sent"] * ir["throughput_rps"] / ir["success_count"]
+    )
 
 
 async def test_send_requests_missing_usage_does_not_crash() -> None:

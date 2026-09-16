@@ -1,7 +1,11 @@
 name: rate_limit_validation
-description: "Rate-limit validation — applies a MaaSSubscription CR and asserts throughput stays at or below the configured RPS limit"
+description: "Rate-limit validation — applies a MaaSSubscription CR (per-model token rate limit) and asserts observed token throughput stays at or below it"
 config:
-  rate_limit_rps: 10
+  subscription_name: "kratos-rate-limit-test"
+  subscription_namespace: "models-as-a-service"  # install-specific tenant namespace; override if yours differs
+  target_model_name: ""       # required — the MaaSModelRef's own name, e.g. "facebook-opt-125m-simulated" (not the plain model id)
+  target_model_namespace: ""  # required — the namespace that MaaSModelRef lives in, e.g. "llm"
+  token_limit: 50             # tokens/sec — see harness/tasks/subscription.py for why the window defaults to 1s to make this directly comparable
   request_count: 100
   concurrency: 20
   key_count: 1
@@ -9,11 +13,16 @@ config:
 tasks:
   - name: apply_rate_limit_subscription
     params:
-      rps_limit: "${config.rate_limit_rps}"
+      subscription_name: "${config.subscription_name}"
+      namespace: "${config.subscription_namespace}"
+      model_name: "${config.target_model_name}"
+      model_namespace: "${config.target_model_namespace}"
+      token_limit: "${config.token_limit}"
   - name: provision_api_key
     params:
       key_name: "kratos-rate-key"
       count: "${config.key_count}"
+      subscription: "${config.subscription_name}"
   - name: send_requests
     params:
       count: "${config.request_count}"
@@ -22,9 +31,9 @@ tasks:
       key_pool: true
     # promql pass-through form (ADR-015) — see single_key_load.yaml.
     assertions:
-      throughput_rps:
-        promql: "${harness.inference_results.throughput_rps}"
-        expect: "<= ${config.rate_limit_rps}"
+      token_throughput_per_sec:
+        promql: "${harness.inference_results.token_throughput_per_sec}"
+        expect: "<= ${config.token_limit}"
       error_rate_pct:
         promql: "${harness.inference_results.error_rate_pct}"
         expect: "< 30"

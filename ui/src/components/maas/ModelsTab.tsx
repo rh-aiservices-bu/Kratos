@@ -93,6 +93,39 @@ function HostingBadge({ model }: { model: MaasModel }) {
   );
 }
 
+// Own column, not nested under Hosting — an external model's provider(s) and
+// whether their credential Secret is correctly labeled (RHOAI 3.5+; see
+// docs/architecture/maas-domain-reference.md Catalog item B) is a distinct
+// question from how the model is served.
+function ExternalProviderCell({ providers }: { providers: MaasModel['external_providers'] }) {
+  if (providers.length === 0) return <span style={{ color: '#888' }}>—</span>;
+  return (
+    <>
+      {providers.map((p, i) => (
+        <div key={`${p.provider_name ?? 'unknown'}-${i}`} style={{ marginBottom: '0.3rem' }}>
+          <div style={{ fontSize: '0.8rem' }}>
+            <strong>{p.provider_name ?? 'unknown provider'}</strong>
+            {p.target_model && <span style={{ color: '#888' }}> → {p.target_model}</span>}
+          </div>
+          {p.credential_secret_name ? (
+            <Label
+              isCompact
+              color={p.credential_secret_label_ok ? 'green' : p.credential_secret_label_ok === false ? 'red' : 'grey'}
+              style={{ marginTop: '0.2rem' }}
+            >
+              {p.credential_secret_label_ok === true && '✓ credential secret labeled'}
+              {p.credential_secret_label_ok === false && '⚠ credential secret missing label'}
+              {p.credential_secret_label_ok === null && 'credential secret: unknown'}
+            </Label>
+          ) : (
+            <span style={{ fontSize: '0.72rem', color: '#888' }}>no credential secret configured</span>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
 export function ModelsTab() {
   const [items, setItems] = useState<MaasModel[] | null>(null);
   const [unavailableReason, setUnavailableReason] = useState<string | null | undefined>(undefined);
@@ -130,6 +163,7 @@ export function ModelsTab() {
             <Th>Name</Th>
             <Th>Namespace</Th>
             <Th>Hosting</Th>
+            <Th>External provider</Th>
             <Th>Status</Th>
             <Th>Endpoint</Th>
             <Th>Subscriptions</Th>
@@ -140,7 +174,7 @@ export function ModelsTab() {
         <Tbody>
           {items.length === 0 ? (
             <Tr>
-              <Td colSpan={8} style={{ color: '#888', fontStyle: 'italic' }}>
+              <Td colSpan={9} style={{ color: '#888', fontStyle: 'italic' }}>
                 No models found.
               </Td>
             </Tr>
@@ -153,6 +187,7 @@ export function ModelsTab() {
                 </Td>
                 <Td><NamespaceCell model={model} /></Td>
                 <Td><HostingBadge model={model} /></Td>
+                <Td><ExternalProviderCell providers={model.external_providers} /></Td>
                 <Td>
                   <Label isCompact color={model.ready ? 'green' : 'red'}>
                     {model.phase ?? (model.ready ? 'Ready' : 'Not ready')}

@@ -282,19 +282,129 @@ def test_list_models_auth_policy_and_gateway_label_unknown_when_unreadable() -> 
     assert model["gateway_access_label"] is None
 
 
-def test_list_models_external_model_is_labeled_external() -> None:
-    external = {
-        "metadata": {
-            "name": "gpt-4o-proxy",
-            "namespace": "models-as-a-service",
-            "annotations": {"openshift.io/display-name": "GPT-4o (external)"},
-        },
-        "spec": {},
-        "status": {"phase": "Active"},
-    }
+_EXTERNAL_MODEL_35 = {
+    "metadata": {
+        "name": "gpt-4o-mini",
+        "namespace": "external-models",
+        "annotations": {"openshift.io/display-name": "GPT-4o (external)"},
+    },
+    "spec": {
+        "modelName": "gpt-4o-mini",
+        "externalProviderRefs": [
+            {
+                "ref": {"name": "openai"},
+                "targetModel": "gpt-4o-mini",
+                "apiFormat": "openai-chat",
+                "path": "/v1/chat/completions",
+            }
+        ],
+    },
+    "status": {"phase": "Active", "conditions": [{"type": "Ready", "status": "True"}]},
+}
+
+_EXTERNAL_PROVIDER_OPENAI = {
+    "metadata": {"name": "openai", "namespace": "external-models"},
+    "spec": {
+        "provider": "openai",
+        "endpoint": "api.openai.com",
+        "auth": {"type": "apikey", "secretRef": {"name": "openai-api-key"}},
+    },
+}
+
+
+def test_list_models_external_model_35_resolves_provider() -> None:
+    """RHOAI 3.5+: ExternalModel/ExternalProvider live under
+    inference.opendatahub.io/v1alpha1, not maas.opendatahub.io — see the
+    domain reference's Catalog item B."""
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "externalmodels":
+            assert group == "inference.opendatahub.io"
+            return {"items": [_EXTERNAL_MODEL_35]}
+        if plural == "externalproviders":
+            assert group == "inference.opendatahub.io"
+            return {"items": [_EXTERNAL_PROVIDER_OPENAI]}
+        return {"items": []}
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+
+    core_api = MagicMock()
+    core_api.read_namespaced_secret.return_value = MagicMock(
+        metadata=MagicMock(labels={"inference.llm-d.ai/ipp-managed": "true"})
+    )
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client.k8s, "CoreV1Api", return_value=core_api), \
+         patch.object(maas_client, "_kube"), \
+         patch("httpx.get", side_effect=Exception("no MAAS_API_URL in test env")):
+        result = maas_client.list_models()
+
+    assert result.available
+    model = result.items[0]
+    assert model["kind"] == "ExternalModel"
+    assert model["hosting"] == "external"
+    assert model["ready"] is True
+    assert model["backing_name"] == "gpt-4o-mini"
+    assert model["endpoint"] == "api.openai.com"
+    provider = model["external_providers"][0]
+    assert provider["provider_name"] == "openai"
+    assert provider["target_model"] == "gpt-4o-mini"
+    assert provider["credential_secret_name"] == "openai-api-key"
+    assert provider["credential_secret_label_ok"] is True
+    core_api.read_namespaced_secret.assert_called_once_with("openai-api-key", "external-models")
+    assert "externalModel" in model["raw_yaml"]
+    assert "externalProviders" in model["raw_yaml"]
+
+
+def test_list_models_flags_credential_secret_missing_label() -> None:
     api = MagicMock()
     api.list_cluster_custom_object.side_effect = lambda group, version, plural: (
-        {"items": [external]} if plural == "externalmodels" else {"items": []}
+        {"items": [_EXTERNAL_MODEL_35]} if plural == "externalmodels"
+        else {"items": [_EXTERNAL_PROVIDER_OPENAI]} if plural == "externalproviders"
+        else {"items": []}
+    )
+
+    core_api = MagicMock()
+    core_api.read_namespaced_secret.return_value = MagicMock(metadata=MagicMock(labels={}))
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client.k8s, "CoreV1Api", return_value=core_api), \
+         patch.object(maas_client, "_kube"), \
+         patch("httpx.get", side_effect=Exception("no MAAS_API_URL in test env")):
+        result = maas_client.list_models()
+
+    provider = result.items[0]["external_providers"][0]
+    assert provider["credential_secret_label_ok"] is False
+
+
+def test_list_models_credential_secret_unreadable_is_unknown() -> None:
+    api = MagicMock()
+    api.list_cluster_custom_object.side_effect = lambda group, version, plural: (
+        {"items": [_EXTERNAL_MODEL_35]} if plural == "externalmodels"
+        else {"items": [_EXTERNAL_PROVIDER_OPENAI]} if plural == "externalproviders"
+        else {"items": []}
+    )
+
+    core_api = MagicMock()
+    core_api.read_namespaced_secret.side_effect = ApiException(status=403)
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client.k8s, "CoreV1Api", return_value=core_api), \
+         patch.object(maas_client, "_kube"), \
+         patch("httpx.get", side_effect=Exception("no MAAS_API_URL in test env")):
+        result = maas_client.list_models()
+
+    provider = result.items[0]["external_providers"][0]
+    assert provider["credential_secret_label_ok"] is None
+
+
+def test_list_models_external_model_without_resolvable_provider() -> None:
+    """The provider CRD read failed/is unavailable — the model still renders,
+    just without endpoint/secret details resolved."""
+    api = MagicMock()
+    api.list_cluster_custom_object.side_effect = lambda group, version, plural: (
+        {"items": [_EXTERNAL_MODEL_35]} if plural == "externalmodels" else {"items": []}
     )
 
     with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
@@ -305,9 +415,11 @@ def test_list_models_external_model_is_labeled_external() -> None:
 
     assert result.available
     model = result.items[0]
-    assert model["kind"] == "ExternalModel"
-    assert model["hosting"] == "external"
-    assert model["ready"] is False
+    provider = model["external_providers"][0]
+    assert provider["provider_name"] == "openai"
+    assert provider["endpoint"] is None
+    assert provider["credential_secret_name"] is None
+    assert model["endpoint"] is None
 
 
 def test_list_models_survives_rest_call_failure(monkeypatch) -> None:
@@ -379,6 +491,30 @@ def _access_api(subscriptions: list[dict], auth_policies: list[dict], groups: li
 
     api.list_cluster_custom_object.side_effect = list_side_effect
     return api
+
+
+def test_list_auth_policies_shapes_fields() -> None:
+    api = _mock_customobjects_api({"items": [_auth_policy("ap-a", "team-a", "model-x")]})
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_auth_policies()
+
+    assert result.available
+    policy = result.items[0]
+    assert policy["name"] == "ap-a"
+    assert policy["owner"]["groups"] == ["team-a"]
+    assert policy["models"] == [{"name": "model-x", "namespace": "llm"}]
+    assert policy["ready"] is True
+
+
+def test_list_auth_policies_forbidden_is_unavailable() -> None:
+    api = _mock_customobjects_api(ApiException(status=403))
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_auth_policies()
+
+    assert result.available is False
+    assert result.reason == "forbidden"
 
 
 def test_list_access_flags_quota_without_access() -> None:

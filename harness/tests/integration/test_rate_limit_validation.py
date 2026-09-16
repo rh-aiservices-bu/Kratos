@@ -35,8 +35,13 @@ async def test_rate_limit_subscription_restored() -> None:
         k8s_config.load_kube_config()
 
     api = k8s_client.CustomObjectsApi()
-    namespace = os.environ.get("NAMESPACE", "kratos")
-    sub_name = "kratos-test-subscription"
+    # Must match scenarios/rate_limit_validation.yaml's config defaults
+    # (subscription_namespace/subscription_name), not the harness's own
+    # NAMESPACE — a MaaSSubscription only gets reconciled when it lives in
+    # the MaaS tenant namespace, never the kratos namespace. See ADR-009's
+    # Update section.
+    namespace = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
+    sub_name = "kratos-rate-limit-test"
 
     # Capture state before
     try:

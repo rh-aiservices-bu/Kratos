@@ -106,3 +106,39 @@ async def test_provision_api_key_uses_default_name(httpx_mock: HTTPXMock) -> Non
     req = httpx_mock.get_requests()[0]
     body = json.loads(req.content)
     assert body["name"].startswith("kratos-")
+
+
+async def test_provision_api_key_binds_explicit_subscription(httpx_mock: HTTPXMock) -> None:
+    """Without this, a created key auto-selects whichever subscription the
+    caller's identity resolves to — rate_limit_validation needs its keys
+    pinned to the specific subscription it just created, not whatever else
+    the SA happens to be eligible for (see ADR-009's Update section)."""
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys",
+        method="POST",
+        json={"id": "key-1", "key": "sk-1"},
+    )
+
+    task = ProvisionApiKeyTask(
+        "provision_api_key", {"key_name": "test-key", "subscription": "kratos-rate-limit-test"}
+    )
+    await task.run(_make_ctx())
+
+    req = httpx_mock.get_requests()[0]
+    body = json.loads(req.content)
+    assert body["subscription"] == "kratos-rate-limit-test"
+
+
+async def test_provision_api_key_omits_subscription_field_when_not_set(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys",
+        method="POST",
+        json={"id": "key-1", "key": "sk-1"},
+    )
+
+    task = ProvisionApiKeyTask("provision_api_key", {"key_name": "test-key"})
+    await task.run(_make_ctx())
+
+    req = httpx_mock.get_requests()[0]
+    body = json.loads(req.content)
+    assert "subscription" not in body

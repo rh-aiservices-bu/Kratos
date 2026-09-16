@@ -19,20 +19,31 @@ class ProvisionApiKeyTask(Task):
         start = time.monotonic()
         key_name = str(self.params.get("key_name") or f"kratos-{ctx.run_id[:8]}")
         count = int(self.params.get("count", 1))
+        # Explicit subscription binding — without it, key creation
+        # auto-selects whichever subscription the caller's identity resolves
+        # to (highest priority among eligible ones), which may not be the
+        # subscription a scenario is specifically trying to validate (e.g.
+        # rate_limit_validation's test CR). Passing this pins the created
+        # keys to a known subscription regardless of what else the caller is
+        # eligible for.
+        subscription = self.params.get("subscription")
 
         url = f"{ctx.maas_api_url}/maas-api/v1/api-keys"
         async with httpx.AsyncClient() as client:
             for i in range(count):
                 name_i = f"{key_name}-{i + 1}" if count > 1 else key_name
+                body: dict = {"name": name_i}
+                if subscription:
+                    body["subscription"] = subscription
                 print(
                     f"[provision_api_key] POST {url} "
-                    f"body={{name: {name_i!r}}} "
+                    f"body={body!r} "
                     f"(token={_redact(ctx.sa_token)})",
                     flush=True,
                 )
                 resp = await client.post(
                     url,
-                    json={"name": name_i},
+                    json=body,
                     headers={"Authorization": f"Bearer {ctx.sa_token}"},
                 )
                 if not resp.is_success:

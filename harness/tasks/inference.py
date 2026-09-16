@@ -111,6 +111,7 @@ class SendRequestsTask(Task):
                     "fail_count": fail,
                     "error_rate_pct": (fail / total * 100) if total > 0 else 0.0,
                     "throughput_rps": success / elapsed if elapsed > 0 else 0.0,
+                    "token_throughput_per_sec": total_tokens_sent / elapsed if elapsed > 0 else 0.0,
                     "total_tokens_sent": total_tokens_sent,
                     "prompt_tokens_sent": prompt_tokens_sent,
                     "completion_tokens_sent": completion_tokens_sent,
