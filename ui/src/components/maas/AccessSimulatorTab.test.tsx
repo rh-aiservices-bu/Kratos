@@ -76,12 +76,24 @@ function mockAll(
   mockGetAuthPolicies.mockResolvedValue({ available: true, reason: null, items: authPolicies });
 }
 
+async function getCandidateInput() {
+  return screen.findByPlaceholderText(/system:authenticated/i);
+}
+
+// Types a value then commits it as a chip via Enter — mirrors how a user
+// actually adds a candidate in CandidateTypeahead (typing alone doesn't
+// commit; the input needs comma or Enter, same as a real chip-input).
+function addCandidate(input: HTMLElement, value: string) {
+  fireEvent.change(input, { target: { value } });
+  fireEvent.keyDown(input, { key: 'Enter' });
+}
+
 test('prompts for input before any groups are entered', async () => {
   mockAll([modelX], [freeSub], [authPolicy]);
 
   render(<AccessSimulatorTab />);
 
-  expect(await screen.findByText(/enter one or more group names/i)).toBeInTheDocument();
+  expect(await screen.findByText(/enter one or more group\/user names/i)).toBeInTheDocument();
 });
 
 test('resolves the highest-priority matching subscription and marks the model reachable', async () => {
@@ -89,12 +101,14 @@ test('resolves the highest-priority matching subscription and marks the model re
 
   render(<AccessSimulatorTab />);
 
-  const input = await screen.findByPlaceholderText(/system:authenticated/i);
-  fireEvent.change(input, { target: { value: 'system:authenticated' } });
+  addCandidate(await getCandidateInput(), 'system:authenticated');
 
   expect(await screen.findByText(/Free Tier \(p10\)/)).toBeInTheDocument();
   expect(screen.getByText('✓ reachable')).toBeInTheDocument();
   expect(screen.getByText('Model X Access')).toBeInTheDocument();
+  // Committed as a chip, so the input's own value is cleared afterward (the
+  // placeholder is gone once a chip exists, so query by its stable aria-label).
+  expect(screen.getByRole('textbox', { name: /candidate groups or users/i })).toHaveValue('');
 });
 
 test('picks the higher-priority subscription when the group set matches multiple', async () => {
@@ -103,8 +117,7 @@ test('picks the higher-priority subscription when the group set matches multiple
 
   render(<AccessSimulatorTab />);
 
-  const input = await screen.findByPlaceholderText(/system:authenticated/i);
-  fireEvent.change(input, { target: { value: 'system:authenticated' } });
+  addCandidate(await getCandidateInput(), 'system:authenticated');
 
   expect(await screen.findByText(/Premium Tier \(p20\)/)).toBeInTheDocument();
   expect(screen.getByText(/beat 1 other matching subscription/)).toBeInTheDocument();
@@ -115,8 +128,7 @@ test('shows not reachable when there is quota but no matching auth policy', asyn
 
   render(<AccessSimulatorTab />);
 
-  const input = await screen.findByPlaceholderText(/system:authenticated/i);
-  fireEvent.change(input, { target: { value: 'system:authenticated' } });
+  addCandidate(await getCandidateInput(), 'system:authenticated');
 
   expect(await screen.findByText('✗ not reachable')).toBeInTheDocument();
   expect(screen.getByText('none')).toBeInTheDocument();
@@ -127,11 +139,64 @@ test('shows no quota when the candidate group set matches no subscription', asyn
 
   render(<AccessSimulatorTab />);
 
-  const input = await screen.findByPlaceholderText(/system:authenticated/i);
-  fireEvent.change(input, { target: { value: 'some-other-group' } });
+  addCandidate(await getCandidateInput(), 'some-other-group');
 
   expect(await screen.findByText(/no quota for this group set/i)).toBeInTheDocument();
   expect(screen.getByText('✗ not reachable')).toBeInTheDocument();
+});
+
+test('matches a subscription owned directly by a user, not just a group', async () => {
+  const userOwnedSub: MaasSubscription = { ...freeSub, owner: { groups: [], users: ['alice'] } };
+  const userOwnedPolicy: MaasAuthPolicy = { ...authPolicy, owner: { groups: [], users: ['alice'] } };
+  mockAll([modelX], [userOwnedSub], [userOwnedPolicy]);
+
+  render(<AccessSimulatorTab />);
+
+  addCandidate(await getCandidateInput(), 'alice');
+
+  expect(await screen.findByText(/Free Tier \(p10\)/)).toBeInTheDocument();
+  expect(screen.getByText('✓ reachable')).toBeInTheDocument();
+});
+
+test('comma-terminated input commits a candidate without pressing Enter', async () => {
+  mockAll([modelX], [freeSub], [authPolicy]);
+
+  render(<AccessSimulatorTab />);
+
+  const input = await getCandidateInput();
+  fireEvent.change(input, { target: { value: 'system:authenticated,' } });
+
+  expect(await screen.findByText(/Free Tier \(p10\)/)).toBeInTheDocument();
+  expect(screen.getByText('system:authenticated')).toBeInTheDocument();
+});
+
+test('suggests known groups and users from subscriptions/auth policies as you type', async () => {
+  const userOwnedSub: MaasSubscription = { ...premiumSub, owner: { groups: [], users: ['alice'] } };
+  mockAll([modelX], [freeSub, userOwnedSub], [authPolicy]);
+
+  render(<AccessSimulatorTab />);
+
+  const input = await getCandidateInput();
+  fireEvent.click(input);
+  fireEvent.change(input, { target: { value: 'a' } });
+
+  // "system:authenticated" (a group) and "alice" (a user) both contain "a".
+  expect(await screen.findByRole('option', { name: 'system:authenticated' })).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: 'alice' })).toBeInTheDocument();
+});
+
+test('clicking a suggested option adds it as a candidate', async () => {
+  mockAll([modelX], [freeSub], [authPolicy]);
+
+  render(<AccessSimulatorTab />);
+
+  const input = await getCandidateInput();
+  fireEvent.click(input);
+  fireEvent.change(input, { target: { value: 'system' } });
+
+  fireEvent.click(await screen.findByRole('option', { name: 'system:authenticated' }));
+
+  expect(await screen.findByText(/Free Tier \(p10\)/)).toBeInTheDocument();
 });
 
 test('shows an unavailable notice when models cannot be read', async () => {
