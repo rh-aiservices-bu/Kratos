@@ -40,7 +40,17 @@ const freeSub: MaasSubscription = {
   description: '',
   priority: 10,
   owner: { groups: ['system:authenticated'], users: [] },
-  models: [{ name: 'model-x', namespace: 'llm', token_rate_limits: [] }],
+  model_refs: [
+    {
+      name: 'model-x',
+      namespace: 'llm',
+      token_rate_limits: [],
+      display_name: 'Model X',
+      model_exists: true,
+      model_ready: true,
+      has_auth_policy: null,
+    },
+  ],
   phase: 'Active',
   ready: true,
   priority_conflict: false,
@@ -61,7 +71,7 @@ const authPolicy: MaasAuthPolicy = {
   namespace: 'models-as-a-service',
   display_name: 'Model X Access',
   owner: { groups: ['system:authenticated'], users: [] },
-  models: [{ name: 'model-x', namespace: 'llm' }],
+  model_refs: [{ name: 'model-x', namespace: 'llm' }],
   ready: true,
   raw_yaml: '',
 };

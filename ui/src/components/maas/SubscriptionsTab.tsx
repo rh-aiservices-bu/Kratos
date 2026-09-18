@@ -55,11 +55,11 @@ function ModelRefBadge({ modelExists, modelReady }: { modelExists: boolean | nul
   return null;
 }
 
-function ModelCoverageList({ sub }: { sub: MaasSubscription }) {
-  if (sub.models.length === 0) return <span style={{ color: '#888' }}>—</span>;
+function ModelRefCoverageList({ sub }: { sub: MaasSubscription }) {
+  if (sub.model_refs.length === 0) return <span style={{ color: '#888' }}>—</span>;
   return (
     <>
-      {sub.models.map((m) => (
+      {sub.model_refs.map((m) => (
         <div key={`${m.namespace}/${m.name}`} style={{ marginBottom: '0.5rem' }}>
           <div>
             <span style={{ fontWeight: 600 }}>{m.display_name}</span>{' '}
@@ -139,7 +139,7 @@ export function SubscriptionsTab() {
             <Th>Name</Th>
             <Th>Priority</Th>
             <Th>Phase</Th>
-            <Th modifier="wrap">Models (rate limit, ref status, auth policy)</Th>
+            <Th modifier="wrap">Model refs (rate limit, ref status, auth policy)</Th>
             <Th>Granted to</Th>
             <Th screenReaderText="Actions" />
           </Tr>
@@ -169,7 +169,7 @@ export function SubscriptionsTab() {
                     {sub.phase ?? 'Unknown'}
                   </Label>
                 </Td>
-                <Td><ModelCoverageList sub={sub} /></Td>
+                <Td><ModelRefCoverageList sub={sub} /></Td>
                 <Td><OwnerChips owner={sub.owner} /></Td>
                 <Td>
                   <Button variant="link" isInline onClick={() => setYamlSub(sub)}>

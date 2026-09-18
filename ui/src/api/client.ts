@@ -131,7 +131,9 @@ export interface MaasSubscription {
   description: string;
   priority: number | null;
   owner: { groups: string[]; users: string[] };
-  models: {
+  // Entries here are references into the MaaSModelRef/model catalog
+  // (spec.modelRefs[]), not full model records — see MaasModel for those.
+  model_refs: {
     name: string;
     namespace: string;
     token_rate_limits: MaasTokenRateLimit[];
@@ -172,6 +174,14 @@ export interface MaasExternalProviderRef {
   credential_secret_label_ok: boolean | null;
 }
 
+export interface MaasModelAuthPolicyRef {
+  name: string;
+  namespace: string;
+  display_name: string;
+  ready: boolean;
+  raw_yaml: string;
+}
+
 export interface MaasModel {
   name: string;
   namespace: string;
@@ -186,6 +196,9 @@ export interface MaasModel {
   subscriptions: MaasModelSubscriptionRef[];
   // null means "couldn't tell" (RBAC/read failure) — never collapse into false.
   has_auth_policy: boolean | null;
+  // Empty when has_auth_policy is false; populated with enough to open each
+  // matching MaaSAuthPolicy's raw YAML directly from the Models tab.
+  auth_policies: MaasModelAuthPolicyRef[];
   gateway_access_label: boolean | null;
   external_providers: MaasExternalProviderRef[];
   serving: MaasServingInfo | null;
@@ -198,7 +211,7 @@ export interface MaasAuthPolicy {
   namespace: string;
   display_name: string;
   owner: { groups: string[]; users: string[] };
-  models: { name: string; namespace: string }[];
+  model_refs: { name: string; namespace: string }[];
   ready: boolean;
   raw_yaml: string;
 }

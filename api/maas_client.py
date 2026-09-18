@@ -221,7 +221,7 @@ def list_subscriptions() -> ResourceList:
         for policy in auth_items:
             policy_names = set(policy["owner"]["groups"]) | set(policy["owner"]["users"])
             if owner_names & policy_names and any(
-                m["namespace"] == namespace and m["name"] == name for m in policy["models"]
+                m["namespace"] == namespace and m["name"] == name for m in policy["model_refs"]
             ):
                 return True
         return False
@@ -240,12 +240,12 @@ def list_subscriptions() -> ResourceList:
             "users": spec.get("owner", {}).get("users") or [],
         }
 
-        models = []
+        model_refs = []
         for m in spec.get("modelRefs") or []:
             m_name, m_namespace = m.get("name"), m.get("namespace")
             ref_info = modelref_by_key.get((m_namespace, m_name)) if modelref_by_key is not None else None
             model_exists = (ref_info is not None) if modelref_by_key is not None else None
-            models.append(
+            model_refs.append(
                 {
                     "name": m_name,
                     "namespace": m_namespace,
@@ -265,7 +265,7 @@ def list_subscriptions() -> ResourceList:
                 "description": annotations.get("openshift.io/description", ""),
                 "priority": spec.get("priority"),
                 "owner": owner,
-                "models": models,
+                "model_refs": model_refs,
                 "phase": status.get("phase"),
                 "ready": _is_ready(conditions),
                 "priority_conflict": bool(conflict_cond and conflict_cond.get("status") == "True"),
@@ -321,15 +321,33 @@ def list_models() -> ResourceList:
     # Models tab already shows subscription coverage via `subscriptions[]`
     # below; this adds the other half. `None` (not False) when auth policies
     # can't be read at all, since "no policy" and "can't tell" are different
-    # things to show an admin.
-    auth_result = _list(_MAAS_GROUP, _MAAS_VERSION, "maasauthpolicies")
-    auth_covered_models: set[tuple[str, str]] | None = None
+    # things to show an admin. Uses list_auth_policies() (not a raw _list()
+    # call) so each matching policy carries a display name/readiness/raw_yaml
+    # too — the Models tab surfaces these directly (clickable "View YAML"),
+    # not just the has_auth_policy boolean, since with the boolean alone a
+    # missing policy was one click away from nowhere.
+    auth_result = list_auth_policies()
+    auth_policies_by_model: dict[tuple[str | None, str | None], list[dict]] | None = None
     if auth_result.available:
-        auth_covered_models = {
-            (m.get("namespace"), m.get("name"))
-            for cr in auth_result.items
-            for m in (cr.get("spec", {}).get("modelRefs") or [])
-        }
+        auth_policies_by_model = {}
+        for policy in auth_result.items:
+            for m in policy["model_refs"]:
+                key = (m["namespace"], m["name"])
+                auth_policies_by_model.setdefault(key, []).append(policy)
+
+    def _auth_policies_for(namespace: str | None, name: str | None) -> list[dict] | None:
+        if auth_policies_by_model is None:
+            return None
+        return [
+            {
+                "name": p["name"],
+                "namespace": p["namespace"],
+                "display_name": p["display_name"],
+                "ready": p["ready"],
+                "raw_yaml": p["raw_yaml"],
+            }
+            for p in auth_policies_by_model.get((namespace, name), [])
+        ]
 
     # Cache namespace label lookups within this call — several models
     # commonly share one namespace (e.g. all internally-served models in `llm`).
@@ -379,6 +397,8 @@ def list_models() -> ResourceList:
         if llm_isvc:
             yaml_doc["llmInferenceService"] = llm_isvc
 
+        model_auth_policies = _auth_policies_for(namespace, name)
+
         shaped.append(
             {
                 "name": name,
@@ -400,9 +420,9 @@ def list_models() -> ResourceList:
                     for s in ((rest_entry or {}).get("subscriptions") or [])
                 ],
                 "has_auth_policy": (
-                    (namespace, name) in auth_covered_models
-                    if auth_covered_models is not None else None
+                    len(model_auth_policies) > 0 if model_auth_policies is not None else None
                 ),
+                "auth_policies": model_auth_policies or [],
                 "gateway_access_label": _gateway_access_for(namespace),
                 "external_providers": [],
                 "serving": serving,
@@ -452,6 +472,8 @@ def list_models() -> ResourceList:
         if referenced_provider_crs:
             yaml_doc["externalProviders"] = referenced_provider_crs
 
+        model_auth_policies = _auth_policies_for(namespace, name)
+
         shaped.append(
             {
                 "name": name,
@@ -466,9 +488,9 @@ def list_models() -> ResourceList:
                 "endpoint": resolved_providers[0]["endpoint"] if resolved_providers else None,
                 "subscriptions": [],
                 "has_auth_policy": (
-                    (namespace, name) in auth_covered_models
-                    if auth_covered_models is not None else None
+                    len(model_auth_policies) > 0 if model_auth_policies is not None else None
                 ),
+                "auth_policies": model_auth_policies or [],
                 "gateway_access_label": _gateway_access_for(namespace),
                 "external_providers": resolved_providers,
                 "serving": None,
@@ -483,9 +505,9 @@ def list_models() -> ResourceList:
 def list_auth_policies() -> ResourceList:
     """`MaaSAuthPolicy` — grants gateway access (separate from subscription
     quota). Shaped to mirror `list_subscriptions()` (`owner.{groups,users}`,
-    per-model `models[]`) so the two can be compared model-by-model the same
-    way — see Catalog item C and `resolve_access()`, which is exactly that
-    comparison for a candidate set of groups.
+    per-model `model_refs[]`) so the two can be compared model-by-model the
+    same way — see Catalog item C and `resolve_access()`, which is exactly
+    that comparison for a candidate set of groups.
     """
     result = _list(_MAAS_GROUP, _MAAS_VERSION, "maasauthpolicies")
     if not result.available:
@@ -507,7 +529,7 @@ def list_auth_policies() -> ResourceList:
                     "groups": [g.get("name") for g in (subjects.get("groups") or [])],
                     "users": subjects.get("users") or [],
                 },
-                "models": [
+                "model_refs": [
                     {"name": m.get("name"), "namespace": m.get("namespace")}
                     for m in (spec.get("modelRefs") or [])
                 ],
@@ -552,7 +574,7 @@ def list_access() -> ResourceList:
         }
 
     shaped_auth = [
-        {**a, "groups": a["owner"]["groups"], "models": [(m["namespace"], m["name"]) for m in a["models"]]}
+        {**a, "groups": a["owner"]["groups"], "models": [(m["namespace"], m["name"]) for m in a["model_refs"]]}
         for a in auth.items
     ]
 
@@ -569,7 +591,7 @@ def list_access() -> ResourceList:
         subs_for_group = [s for s in subs.items if name in s["owner"]["groups"]]
         auth_for_group = [a for a in shaped_auth if name in a["groups"]]
 
-        quota_models = {(m["namespace"], m["name"]) for s in subs_for_group for m in s["models"]}
+        quota_models = {(m["namespace"], m["name"]) for s in subs_for_group for m in s["model_refs"]}
         access_models = {m for a in auth_for_group for m in a["models"]}
 
         rows.append(

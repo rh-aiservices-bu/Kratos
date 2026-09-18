@@ -31,6 +31,15 @@ const baseModel: MaasModel = {
     { name: 'simulator-free', display_name: 'Simulator Free Tier', description: null },
   ],
   has_auth_policy: true,
+  auth_policies: [
+    {
+      name: 'simulator-access',
+      namespace: 'models-as-a-service',
+      display_name: 'Simulator Access',
+      ready: true,
+      raw_yaml: 'kind: MaaSAuthPolicy\nmetadata:\n  name: simulator-access\n',
+    },
+  ],
   gateway_access_label: true,
   external_providers: [],
   serving: { replicas: 1, resources: null, conditions: [] },
@@ -61,7 +70,24 @@ test('renders model rows with hosting, status, endpoint, and subscriptions', asy
   expect(screen.getByText('1 replica')).toBeInTheDocument();
   expect(screen.getByText('Namespace')).toBeInTheDocument();
   expect(screen.getByText('✓ gateway-access')).toBeInTheDocument();
-  expect(screen.getByText('✓ has auth policy')).toBeInTheDocument();
+  expect(screen.getByText('✓ Simulator Access')).toBeInTheDocument();
+});
+
+test('clicking the auth policy\'s View YAML link opens its raw YAML', async () => {
+  mockGetModels.mockResolvedValue({ available: true, reason: null, items: [baseModel] });
+
+  render(<ModelsTab />);
+
+  // Two "View YAML" links exist on this row (the model's own, and the auth
+  // policy's) — the auth policy one is the first, since it renders earlier
+  // in the row's column order.
+  const viewYamlLinks = await screen.findAllByRole('button', { name: /view yaml/i });
+  expect(viewYamlLinks).toHaveLength(2);
+  fireEvent.click(viewYamlLinks[0]);
+
+  const modal = await screen.findByTestId('raw-yaml-modal');
+  expect(modal).toHaveTextContent('Auth Policy: Simulator Access');
+  expect(modal).toHaveTextContent('kind: MaaSAuthPolicy');
 });
 
 test('flags a namespace missing the gateway-access label', async () => {
@@ -74,7 +100,7 @@ test('flags a namespace missing the gateway-access label', async () => {
 });
 
 test('flags a model with no matching auth policy', async () => {
-  const noAuthPolicy: MaasModel = { ...baseModel, has_auth_policy: false };
+  const noAuthPolicy: MaasModel = { ...baseModel, has_auth_policy: false, auth_policies: [] };
   mockGetModels.mockResolvedValue({ available: true, reason: null, items: [noAuthPolicy] });
 
   render(<ModelsTab />);
@@ -203,7 +229,10 @@ test('clicking View YAML opens the raw YAML modal for that model', async () => {
 
   render(<ModelsTab />);
 
-  fireEvent.click(await screen.findByRole('button', { name: /view yaml/i }));
+  // Two "View YAML" links exist on this row (the model's own, in the Actions
+  // column, and the auth policy's) — the model's is the last one.
+  const viewYamlLinks = await screen.findAllByRole('button', { name: /view yaml/i });
+  fireEvent.click(viewYamlLinks[viewYamlLinks.length - 1]);
 
   // The modal is lazy-loaded (Suspense) so it doesn't ship Monaco in the main
   // bundle — see ModelsTab.tsx — so it only appears after a tick.

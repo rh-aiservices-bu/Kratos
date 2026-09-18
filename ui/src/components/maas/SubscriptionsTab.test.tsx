@@ -28,7 +28,7 @@ const baseSubscription: MaasSubscription = {
   description: 'Free tier: 100 tokens/min for all authenticated users',
   priority: 10,
   owner: { groups: ['system:authenticated'], users: [] },
-  models: [
+  model_refs: [
     {
       name: 'facebook-opt-125m-simulated',
       namespace: 'llm',
@@ -70,10 +70,47 @@ test('renders subscription rows with priority, phase, and rate limits', async ()
   expect(screen.getByText('system:authenticated')).toBeInTheDocument();
 });
 
+test('renders multiple model refs, each with their own (possibly multi-tier) rate limits', async () => {
+  // Rate limits belong to each model ref, not the subscription as a whole —
+  // different models under one subscription can carry different limits, and
+  // one model ref can carry more than one tier (e.g. burst + sustained).
+  const multiTier: MaasSubscription = {
+    ...baseSubscription,
+    model_refs: [
+      {
+        ...baseSubscription.model_refs[0],
+        token_rate_limits: [
+          { limit: 100, window: '1m' },
+          { limit: 2000, window: '1h' },
+        ],
+      },
+      {
+        name: 'granite-8b',
+        namespace: 'llm',
+        token_rate_limits: [{ limit: 20, window: '1m' }],
+        display_name: 'Granite 8B',
+        model_exists: true,
+        model_ready: true,
+        has_auth_policy: false,
+      },
+    ],
+  };
+  mockGetSubscriptions.mockResolvedValue({ available: true, reason: null, items: [multiTier] });
+
+  render(<SubscriptionsTab />);
+
+  expect(await screen.findByText('Facebook OPT 125M (Simulated)')).toBeInTheDocument();
+  expect(screen.getByText('100 / 1m')).toBeInTheDocument();
+  expect(screen.getByText('2000 / 1h')).toBeInTheDocument();
+  expect(screen.getByText('Granite 8B')).toBeInTheDocument();
+  expect(screen.getByText('20 / 1m')).toBeInTheDocument();
+  expect(screen.getByText('⚠ no auth policy')).toBeInTheDocument();
+});
+
 test('flags a missing auth policy on a covered model', async () => {
   const noAuthPolicy: MaasSubscription = {
     ...baseSubscription,
-    models: [{ ...baseSubscription.models[0], has_auth_policy: false }],
+    model_refs: [{ ...baseSubscription.model_refs[0], has_auth_policy: false }],
   };
   mockGetSubscriptions.mockResolvedValue({ available: true, reason: null, items: [noAuthPolicy] });
 
@@ -85,7 +122,7 @@ test('flags a missing auth policy on a covered model', async () => {
 test('flags a dangling model reference', async () => {
   const danglingRef: MaasSubscription = {
     ...baseSubscription,
-    models: [{ ...baseSubscription.models[0], model_exists: false, model_ready: null }],
+    model_refs: [{ ...baseSubscription.model_refs[0], model_exists: false, model_ready: null }],
   };
   mockGetSubscriptions.mockResolvedValue({ available: true, reason: null, items: [danglingRef] });
 

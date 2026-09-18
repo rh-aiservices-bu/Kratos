@@ -67,10 +67,10 @@ function resolveAccess(
     const key = modelKey(model.namespace, model.name);
 
     const matchingSubscriptions = subscriptions.filter(
-      (s) => ownerMatches(s.owner, candidates) && s.models.some((m) => modelKey(m.namespace, m.name) === key),
+      (s) => ownerMatches(s.owner, candidates) && s.model_refs.some((m) => modelKey(m.namespace, m.name) === key),
     );
     const matchingPolicies = authPolicies.filter(
-      (p) => ownerMatches(p.owner, candidates) && p.models.some((m) => modelKey(m.namespace, m.name) === key),
+      (p) => ownerMatches(p.owner, candidates) && p.model_refs.some((m) => modelKey(m.namespace, m.name) === key),
     );
 
     const winningSubscription =

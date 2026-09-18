@@ -14,6 +14,12 @@ const RawYamlModal = lazy(() =>
 
 const POLL_INTERVAL_MS = 25000;
 
+interface YamlTarget {
+  title: string;
+  downloadFileName: string;
+  yamlText: string;
+}
+
 function SubscriptionChips({ subs }: { subs: MaasModel['subscriptions'] }) {
   if (subs.length === 0) return <span style={{ color: '#888' }}>—</span>;
   return (
@@ -32,14 +38,49 @@ function SubscriptionChips({ subs }: { subs: MaasModel['subscriptions'] }) {
 // reads as an actual misconfiguration to fix. Its own column, not tucked
 // under Subscriptions — quota (subscriptions) and gateway access (auth
 // policy) are two different governance questions, per Catalog item B/C.
-function AuthPolicyBadge({ hasAuthPolicy }: { hasAuthPolicy: boolean | null }) {
+// When at least one policy actually covers this model, its status label is
+// followed by an explicit "View YAML" link — not a clickable label on its
+// own, which looked identical to every other (non-clickable) status label
+// in this table and wasn't discoverable as an action.
+function AuthPolicyCell({
+  hasAuthPolicy,
+  policies,
+  onSelect,
+}: {
+  hasAuthPolicy: boolean | null;
+  policies: MaasModel['auth_policies'];
+  onSelect: (target: YamlTarget) => void;
+}) {
   if (hasAuthPolicy === null) {
     return <span style={{ fontSize: '0.75rem', color: '#888' }}>unknown</span>;
   }
+  if (!hasAuthPolicy || policies.length === 0) {
+    return <Label isCompact color="orange">⚠ no auth policy</Label>;
+  }
   return (
-    <Label isCompact color={hasAuthPolicy ? 'green' : 'orange'}>
-      {hasAuthPolicy ? '✓ has auth policy' : '⚠ no auth policy'}
-    </Label>
+    <>
+      {policies.map((p) => (
+        <div key={p.name} style={{ marginBottom: '0.3rem' }}>
+          <Label isCompact color={p.ready ? 'green' : 'grey'} style={{ marginRight: '0.4rem' }}>
+            {p.ready ? '✓' : '⚠'} {p.display_name}
+          </Label>
+          <Button
+            variant="link"
+            isInline
+            style={{ fontSize: '0.75rem' }}
+            onClick={() =>
+              onSelect({
+                title: `Auth Policy: ${p.display_name}`,
+                downloadFileName: `${p.name}.yaml`,
+                yamlText: p.raw_yaml,
+              })
+            }
+          >
+            View YAML
+          </Button>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -129,7 +170,7 @@ function ExternalProviderCell({ providers }: { providers: MaasModel['external_pr
 export function ModelsTab() {
   const [items, setItems] = useState<MaasModel[] | null>(null);
   const [unavailableReason, setUnavailableReason] = useState<string | null | undefined>(undefined);
-  const [yamlModel, setYamlModel] = useState<MaasModel | null>(null);
+  const [yamlTarget, setYamlTarget] = useState<YamlTarget | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function fetchData() {
@@ -201,9 +242,25 @@ export function ModelsTab() {
                   )}
                 </Td>
                 <Td><SubscriptionChips subs={model.subscriptions} /></Td>
-                <Td><AuthPolicyBadge hasAuthPolicy={model.has_auth_policy} /></Td>
                 <Td>
-                  <Button variant="link" isInline onClick={() => setYamlModel(model)}>
+                  <AuthPolicyCell
+                    hasAuthPolicy={model.has_auth_policy}
+                    policies={model.auth_policies}
+                    onSelect={setYamlTarget}
+                  />
+                </Td>
+                <Td>
+                  <Button
+                    variant="link"
+                    isInline
+                    onClick={() =>
+                      setYamlTarget({
+                        title: `Model: ${model.display_name}`,
+                        downloadFileName: `${model.name}.yaml`,
+                        yamlText: model.raw_yaml,
+                      })
+                    }
+                  >
                     View YAML
                   </Button>
                 </Td>
@@ -213,13 +270,13 @@ export function ModelsTab() {
         </Tbody>
       </Table>
 
-      {yamlModel !== null && (
+      {yamlTarget !== null && (
         <Suspense fallback={<Spinner size="lg" aria-label="Loading editor" />}>
           <RawYamlModal
-            title={`Model: ${yamlModel.display_name}`}
-            downloadFileName={`${yamlModel.name}.yaml`}
-            yamlText={yamlModel.raw_yaml}
-            onClose={() => setYamlModel(null)}
+            title={yamlTarget.title}
+            downloadFileName={yamlTarget.downloadFileName}
+            yamlText={yamlTarget.yamlText}
+            onClose={() => setYamlTarget(null)}
           />
         </Suspense>
       )}

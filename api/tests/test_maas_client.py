@@ -116,9 +116,56 @@ def test_list_subscriptions_shapes_fields() -> None:
     assert sub["ready"] is True
     assert sub["priority_conflict"] is False
     assert sub["owner"]["groups"] == ["system:authenticated"]
-    assert sub["models"][0]["token_rate_limits"] == [{"limit": 100, "window": "1m"}]
+    assert sub["model_refs"][0]["token_rate_limits"] == [{"limit": 100, "window": "1m"}]
     assert "simulator-free" in sub["raw_yaml"]
     assert "priority: 10" in sub["raw_yaml"]
+
+
+_SUBSCRIPTION_MULTI_MODEL_MULTI_LIMIT = {
+    "metadata": {"name": "multi-tier", "namespace": "models-as-a-service", "annotations": {}},
+    "spec": {
+        "priority": 10,
+        "owner": {"groups": [{"name": "system:authenticated"}], "users": []},
+        "modelRefs": [
+            {
+                "name": "facebook-opt-125m-simulated",
+                "namespace": "llm",
+                # A single model ref can carry more than one rate-limit tier
+                # (e.g. a burst window and a sustained one) — the CRD field
+                # is tokenRateLimits[], not a single limit.
+                "tokenRateLimits": [
+                    {"limit": 100, "window": "1m"},
+                    {"limit": 2000, "window": "1h"},
+                ],
+            },
+            {
+                "name": "granite-8b",
+                "namespace": "llm",
+                "tokenRateLimits": [{"limit": 20, "window": "1m"}],
+            },
+        ],
+    },
+    "status": {"phase": "Active", "conditions": [{"type": "Ready", "status": "True"}]},
+}
+
+
+def test_list_subscriptions_supports_multiple_model_refs_with_multiple_rate_limits_each() -> None:
+    """Rate limits belong to each model ref (spec.modelRefs[].tokenRateLimits[]),
+    not the subscription as a whole — different models under the same
+    subscription can carry entirely different limits, and a single model ref
+    can carry more than one tier. Nothing here should collapse either list."""
+    api = _mock_customobjects_api({"items": [_SUBSCRIPTION_MULTI_MODEL_MULTI_LIMIT]})
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_subscriptions()
+
+    model_refs = result.items[0]["model_refs"]
+    assert [m["name"] for m in model_refs] == ["facebook-opt-125m-simulated", "granite-8b"]
+    assert model_refs[0]["token_rate_limits"] == [
+        {"limit": 100, "window": "1m"},
+        {"limit": 2000, "window": "1h"},
+    ]
+    assert model_refs[1]["token_rate_limits"] == [{"limit": 20, "window": "1m"}]
 
 
 def test_list_subscriptions_flags_priority_conflict() -> None:
@@ -196,7 +243,7 @@ def test_list_subscriptions_enriches_models_with_ref_and_auth_policy() -> None:
          patch.object(maas_client, "_kube"):
         result = maas_client.list_subscriptions()
 
-    model = result.items[0]["models"][0]
+    model = result.items[0]["model_refs"][0]
     assert model["display_name"] == "Facebook OPT 125M (Simulated)"
     assert model["model_exists"] is True
     assert model["model_ready"] is True
@@ -221,7 +268,7 @@ def test_list_subscriptions_flags_missing_auth_policy_and_dangling_model_ref() -
          patch.object(maas_client, "_kube"):
         result = maas_client.list_subscriptions()
 
-    model = result.items[0]["models"][0]
+    model = result.items[0]["model_refs"][0]
     assert model["display_name"] == "facebook-opt-125m-simulated"
     assert model["model_exists"] is False
     assert model["model_ready"] is None
@@ -245,7 +292,7 @@ def test_list_subscriptions_model_ref_and_auth_policy_unknown_when_unreadable() 
          patch.object(maas_client, "_kube"):
         result = maas_client.list_subscriptions()
 
-    model = result.items[0]["models"][0]
+    model = result.items[0]["model_refs"][0]
     assert model["display_name"] == "facebook-opt-125m-simulated"
     assert model["model_exists"] is None
     assert model["model_ready"] is None
@@ -298,8 +345,46 @@ def test_list_models_merges_modelref_llmisvc_and_rest(monkeypatch) -> None:
     assert "maasModelRef" in model["raw_yaml"]
     assert "llmInferenceService" in model["raw_yaml"]
     assert model["has_auth_policy"] is True
+    assert model["auth_policies"] == [
+        {
+            "name": "simulator-access",
+            "namespace": "models-as-a-service",
+            "display_name": "simulator-access",
+            "ready": True,
+            "raw_yaml": maas_client._to_yaml(_AUTH_POLICY_COVERING_MODEL),
+        }
+    ]
     assert model["gateway_access_label"] is True
     core_api.read_namespace.assert_called_once_with("llm")
+
+
+def test_list_models_auth_policies_empty_when_none_match() -> None:
+    """A model with has_auth_policy False should carry an empty list, not
+    None — None is reserved for 'couldn't read auth policies at all'."""
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "maasmodelrefs":
+            return {"items": [_MODELREF]}
+        if plural in ("externalmodels", "maasauthpolicies"):
+            return {"items": []}
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+    api.get_namespaced_custom_object.return_value = _LLM_ISVC
+
+    core_api = MagicMock()
+    core_api.read_namespace.return_value = MagicMock(metadata=MagicMock(labels={}))
+
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client.k8s, "CoreV1Api", return_value=core_api), \
+         patch.object(maas_client, "_kube"), \
+         patch("httpx.get", side_effect=Exception("no MAAS_API_URL in test env")):
+        result = maas_client.list_models()
+
+    model = result.items[0]
+    assert model["has_auth_policy"] is False
+    assert model["auth_policies"] == []
 
 
 def test_list_models_flags_missing_auth_policy_and_gateway_label() -> None:
@@ -581,7 +666,7 @@ def test_list_auth_policies_shapes_fields() -> None:
     policy = result.items[0]
     assert policy["name"] == "ap-a"
     assert policy["owner"]["groups"] == ["team-a"]
-    assert policy["models"] == [{"name": "model-x", "namespace": "llm"}]
+    assert policy["model_refs"] == [{"name": "model-x", "namespace": "llm"}]
     assert policy["ready"] is True
 
 
