@@ -37,14 +37,29 @@ async def client(_temp_db, _mock_k8s):
         yield c
 
 
-async def test_scenarios_returns_five(client) -> None:
+async def test_scenarios_returns_seven(client) -> None:
     resp = await client.get("/api/scenarios")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 5
+    assert len(data) == 7
     names = {s["name"] for s in data}
     assert {"single_key_load", "multi_key_load", "direct_inference"} <= names
-    assert all("name" in s and "description" in s for s in data)
+    assert all("name" in s and "description" in s and "category" in s for s in data)
+
+
+async def test_scenarios_category_defaults_to_custom(client, tmp_path, monkeypatch) -> None:
+    """A scenario file with no `category:` field lands in "Custom" — the one
+    default that makes the UI's always-present Custom bucket work for
+    anything a user drops in later without extra plumbing."""
+    (tmp_path / "no_category.yaml").write_text(
+        "name: no_category\ndescription: test\ntasks: []\ncleanup: automatic\n"
+    )
+    monkeypatch.setenv("SCENARIOS_DIR", str(tmp_path))
+
+    resp = await client.get("/api/scenarios")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data == [{"name": "no_category", "description": "test", "config": {}, "category": "Custom"}]
 
 
 async def test_create_run_returns_run_id(client) -> None:

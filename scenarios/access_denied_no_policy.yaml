@@ -6,6 +6,7 @@ description: >-
   rather than trusting the "quota_without_access" badge the MaaS Setup UI's
   Access Control tab shows for this exact situation (see
   docs/architecture/maas-domain-reference.md Catalog item C).
+category: "Access Control"
 config:
   subscription_name: "kratos-fail-closed-test"
   subscription_namespace: "models-as-a-service"  # install-specific tenant namespace; override if yours differs
@@ -38,6 +39,11 @@ tasks:
       key_name: "kratos-fail-closed-key"
       count: "${config.key_count}"
       subscription: "${config.subscription_name}"
+    # REST-only check (ADR-019) — see rate_limit_validation.yaml for why.
+    assertions:
+      subscription_echo_match_count:
+        promql: "${harness.key_provision_checks.subscription_echo_match_count}"
+        expect: "== ${config.key_count}"
   - name: send_requests
     params:
       count: "${config.request_count}"

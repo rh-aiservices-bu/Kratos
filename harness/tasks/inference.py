@@ -236,3 +236,12 @@ class SendRequestsTask(Task):
 
 
 REGISTRY["send_requests"] = SendRequestsTask
+# Registry alias, not a new class (ADR-019): scenarios/api_key_lifecycle.yaml
+# needs a second, differently-labeled "send some requests" step after
+# revoking the key pool, to confirm denial is immediate. Giving a second YAML
+# task entry the *same* registered name ("send_requests" twice) would collide
+# in the UI's task pipeline and progress tracking — harness/runner.py's
+# _write_progress keys per-task completed-progress by task name, and
+# ui/src/components/TaskProgress.tsx uses task.name as the React list key —
+# so this needs its own registry entry, not just a repeated YAML task name.
+REGISTRY["verify_revoked_key_denied"] = SendRequestsTask

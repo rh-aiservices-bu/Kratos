@@ -1,5 +1,6 @@
 name: metrics_fill
 description: "Metrics fill — sends a burst of requests and validates the MaaS metrics pipeline is populated correctly"
+category: "Metrics Validation"
 config:
   request_count: 200
   concurrency: 10

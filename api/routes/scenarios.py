@@ -23,6 +23,11 @@ async def list_scenarios() -> list[dict]:
                 "name": raw.get("name", f.stem),
                 "description": raw.get("description", ""),
                 "config": raw.get("config", {}),
+                # A scenario with no explicit category (e.g. one someone
+                # writes themselves) lands in "Custom" automatically — the
+                # UI always shows that bucket, so this is the only default
+                # needed to make it "just work".
+                "category": raw.get("category") or "Custom",
             }
         )
     return result

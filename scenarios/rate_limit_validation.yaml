@@ -1,5 +1,6 @@
 name: rate_limit_validation
 description: "Rate-limit validation — applies a MaaSSubscription CR (per-model token rate limit) and asserts observed token throughput stays at or below it"
+category: "Rate Limiting"
 config:
   subscription_name: "kratos-rate-limit-test"
   subscription_namespace: "models-as-a-service"  # install-specific tenant namespace; override if yours differs
@@ -32,6 +33,15 @@ tasks:
       key_name: "kratos-rate-key"
       count: "${config.key_count}"
       subscription: "${config.subscription_name}"
+    # REST-only check (ADR-019): the create response actually echoes the
+    # subscription we asked for, rather than silently auto-selecting a
+    # different eligible one — this scenario already needs the subscription
+    # param for its own purpose, so this closes the checklist row at no
+    # added CR-coupling.
+    assertions:
+      subscription_echo_match_count:
+        promql: "${harness.key_provision_checks.subscription_echo_match_count}"
+        expect: "== ${config.key_count}"
   - name: send_requests
     params:
       count: "${config.request_count}"

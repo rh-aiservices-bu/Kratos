@@ -1,5 +1,6 @@
 name: direct_inference
 description: "Direct inference — bypasses MaaS gateway, tests the underlying model serving endpoint"
+category: "Load Testing"
 config:
   target_url: ""
   target_token: ""

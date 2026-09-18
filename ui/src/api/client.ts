@@ -2,6 +2,9 @@ export interface Scenario {
   name: string;
   description: string;
   config: Record<string, string | number | boolean>;
+  // Always present — the backend defaults a scenario with no `category:`
+  // field to "Custom" (api/routes/scenarios.py).
+  category: string;
 }
 
 export interface Run {

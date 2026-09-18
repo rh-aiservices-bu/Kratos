@@ -43,13 +43,17 @@ displayed or computed. Status values:
 
 ## API key lifecycle
 
+All rows here are REST-only — no Kubernetes CR read or write, by design (ADR-019), since this is the section of the checklist that's actually achievable that way. `scenarios/api_key_lifecycle.yaml` is the first Kratos scenario with zero CR dependency at all.
+
 | Claim | Status | Covered by |
 |---|---|---|
-| `provision_api_key`'s requested `subscription` binding actually took — the response's `subscription` field equals what was sent, not a silent auto-selected fallback | Gap | `harness/tasks/auth.py` reads only `id`/`key` from the response; `subscription`/`name`/`expiresAt` are dropped (confirmed via `harness/tests/test_auth.py`, which never asserts on them) |
-| `expiresAt` is consistent with the tenant's configured `MaasTenantConfig.spec.apiKeys.maxExpirationDays` | Gap | none |
-| Revocation (`DELETE /maas-api/v1/api-keys/{id}`) takes effect immediately for inference, not after a caching delay somewhere in the auth chain | Gap | none — every scenario's cleanup revokes keys, but nothing checks a revoked key actually stops working |
-| `POST /maas-api/v1/api-keys/search` is scoped to the caller's own keys, not all keys cluster-wide under an elevated SA token | Gap, flagged unverified in `docs/architecture/maas-domain-reference.md` Catalog H | none |
-| The response's `name` field matches what was requested, with no silent truncation/sanitization | Gap, low priority | none |
+| `provision_api_key`'s requested `subscription` binding actually took — the response's `subscription` field equals what was sent, not a silent auto-selected fallback | **Verified** | `harness/tasks/auth.py`'s `key_provision_checks.subscription_echo_match_count`, asserted in `scenarios/rate_limit_validation.yaml` and `scenarios/access_denied_no_policy.yaml` (the two scenarios that actually pass `subscription`) |
+| The response's `name` field matches what was requested, with no silent truncation/sanitization | **Verified** | `key_provision_checks.name_echo_match_count`, asserted in `scenarios/api_key_lifecycle.yaml` |
+| `expiresAt` is present at all on every created key | **Verified** (the CR-free half only) | `key_provision_checks.expires_at_present_count`, asserted in `scenarios/api_key_lifecycle.yaml` |
+| `expiresAt`'s actual value is consistent with the tenant's configured `MaasTenantConfig.spec.apiKeys.maxExpirationDays` | Gap (unchanged) | Needs reading `MaasTenantConfig`, a CR — deliberately not pulled into `api_key_lifecycle.yaml` to keep that scenario CR-free; would need its own CR-coupled scenario/assertion |
+| Revocation (`DELETE /maas-api/v1/api-keys/{id}`) takes effect immediately for inference, not after a caching delay somewhere in the auth chain | **Verified** | `scenarios/api_key_lifecycle.yaml`: `revoke_api_keys` then `verify_revoked_key_denied` (a registry alias of `send_requests`) asserts `unauthorized_count > 0` on the very next request |
+| `POST /maas-api/v1/api-keys/search` finds the keys this run created, filtered correctly by `name_prefix` | **Verified** (inclusion + filtering only) | `verify_api_key_search` task, asserted in `scenarios/api_key_lifecycle.yaml` |
+| `POST /maas-api/v1/api-keys/search` is scoped to the caller's own keys, not all keys cluster-wide under an elevated SA token | **Still Gap** — honestly out of reach with a single identity | The harness only has one identity (its own SA token) to call `/search` with, so it can prove keys we created are findable, never that a *different* caller's keys are excluded. Would need a second identity/token available to the harness to close for real. |
 
 ## Model / subscription CR status truthfulness
 

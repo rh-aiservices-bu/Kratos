@@ -1,9 +1,8 @@
 import json
 
-import pytest
 from pytest_httpx import HTTPXMock
 
-from harness.tasks.auth import ProvisionApiKeyTask
+from harness.tasks.auth import ProvisionApiKeyTask, RevokeApiKeysTask, VerifyApiKeySearchTask
 from harness.tasks.base import TaskContext
 
 
@@ -27,7 +26,13 @@ async def test_provision_api_key_appends_to_shared_state(httpx_mock: HTTPXMock) 
     httpx_mock.add_response(
         url="http://maas.test/maas-api/v1/api-keys",
         method="POST",
-        json={"id": "key-123", "key": "sk-oai-abc"},
+        json={
+            "id": "key-123",
+            "key": "sk-oai-abc",
+            "name": "test-key",
+            "subscription": "simulator-free",
+            "expiresAt": "2027-01-01T00:00:00Z",
+        },
     )
 
     task = ProvisionApiKeyTask("provision_api_key", {"key_name": "test-key"})
@@ -35,7 +40,15 @@ async def test_provision_api_key_appends_to_shared_state(httpx_mock: HTTPXMock) 
     result = await task.run(ctx)
 
     assert result.status == "PASS"
-    assert ctx.shared_state["api_keys"] == [{"id": "key-123", "key": "sk-oai-abc"}]
+    assert ctx.shared_state["api_keys"] == [
+        {
+            "id": "key-123",
+            "key": "sk-oai-abc",
+            "name": "test-key",
+            "subscription": "simulator-free",
+            "expiresAt": "2027-01-01T00:00:00Z",
+        }
+    ]
 
 
 async def test_provision_api_key_accumulates_multiple_keys(httpx_mock: HTTPXMock) -> None:
@@ -138,6 +151,143 @@ async def test_provision_api_key_omits_subscription_field_when_not_set(httpx_moc
 
     task = ProvisionApiKeyTask("provision_api_key", {"key_name": "test-key"})
     await task.run(_make_ctx())
+
+
+async def test_provision_api_key_checks_response_echo(httpx_mock: HTTPXMock) -> None:
+    """REST-only lifecycle checks (ADR-019): does the create response honestly
+    echo what was requested? Subscription is checked only when requested."""
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys",
+        method="POST",
+        json={
+            "id": "key-1",
+            "key": "sk-1",
+            "name": "test-key",
+            "subscription": "kratos-rate-limit-test",
+            "expiresAt": "2027-01-01T00:00:00Z",
+        },
+    )
+
+    task = ProvisionApiKeyTask(
+        "provision_api_key", {"key_name": "test-key", "subscription": "kratos-rate-limit-test"}
+    )
+    ctx = _make_ctx()
+    await task.run(ctx)
+
+    checks = ctx.shared_state["key_provision_checks"]
+    assert checks["total_keys"] == 1
+    assert checks["name_echo_match_count"] == 1
+    assert checks["subscription_checked_count"] == 1
+    assert checks["subscription_echo_match_count"] == 1
+    assert checks["expires_at_present_count"] == 1
+
+
+async def test_provision_api_key_checks_flag_mismatches(httpx_mock: HTTPXMock) -> None:
+    """A response that silently diverges from the request (wrong name,
+    auto-selected subscription instead of the one asked for, no expiry) must
+    not be counted as a match."""
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys",
+        method="POST",
+        json={
+            "id": "key-1",
+            "key": "sk-1",
+            "name": "renamed-by-server",
+            "subscription": "auto-selected-other-sub",
+        },
+    )
+
+    task = ProvisionApiKeyTask(
+        "provision_api_key", {"key_name": "test-key", "subscription": "kratos-rate-limit-test"}
+    )
+    ctx = _make_ctx()
+    await task.run(ctx)
+
+    checks = ctx.shared_state["key_provision_checks"]
+    assert checks["name_echo_match_count"] == 0
+    assert checks["subscription_checked_count"] == 1
+    assert checks["subscription_echo_match_count"] == 0
+    assert checks["expires_at_present_count"] == 0
+
+
+async def test_provision_api_key_subscription_not_checked_when_absent(httpx_mock: HTTPXMock) -> None:
+    """A scenario that never passes `subscription` (e.g. api_key_lifecycle,
+    kept CR-free) shouldn't have that counter treated as a failure."""
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys",
+        method="POST",
+        json={"id": "key-1", "key": "sk-1", "name": "test-key"},
+    )
+
+    task = ProvisionApiKeyTask("provision_api_key", {"key_name": "test-key"})
+    ctx = _make_ctx()
+    await task.run(ctx)
+
+    checks = ctx.shared_state["key_provision_checks"]
+    assert checks["subscription_checked_count"] == 0
+    assert checks["subscription_echo_match_count"] == 0
+
+
+async def test_revoke_api_keys_deletes_and_counts(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys/id-1", method="DELETE", status_code=204
+    )
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys/id-2", method="DELETE", status_code=204
+    )
+
+    ctx = _make_ctx({"api_keys": [{"id": "id-1", "key": "sk-1"}, {"id": "id-2", "key": "sk-2"}]})
+    task = RevokeApiKeysTask("revoke_api_keys", {})
+    result = await task.run(ctx)
+
+    assert result.status == "PASS"
+    assert ctx.shared_state["revoked_count"] == 2
+
+
+async def test_revoke_api_keys_counts_partial_failure(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys/id-1", method="DELETE", status_code=204
+    )
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys/id-2", method="DELETE", status_code=404
+    )
+
+    ctx = _make_ctx({"api_keys": [{"id": "id-1", "key": "sk-1"}, {"id": "id-2", "key": "sk-2"}]})
+    task = RevokeApiKeysTask("revoke_api_keys", {})
+    result = await task.run(ctx)
+
+    assert result.status == "PASS"
+    assert ctx.shared_state["revoked_count"] == 1
+
+
+async def test_verify_api_key_search_matches_expected_count(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys/search",
+        method="POST",
+        json={"items": [{"id": "id-1"}, {"id": "id-2"}]},
+    )
+
+    ctx = _make_ctx({"api_keys": [{"id": "id-1", "key": "sk-1"}, {"id": "id-2", "key": "sk-2"}]})
+    task = VerifyApiKeySearchTask("verify_api_key_search", {"name_prefix": "kratos-lifecycle-key"})
+    result = await task.run(ctx)
+
+    assert result.status == "PASS"
+    assert ctx.shared_state["search_check"] == {"found_count": 2, "expected_count": 2}
+
+
+async def test_verify_api_key_search_sends_name_prefix(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys/search",
+        method="POST",
+        json={"items": []},
+    )
+
+    task = VerifyApiKeySearchTask("verify_api_key_search", {"name_prefix": "kratos-lifecycle-key"})
+    await task.run(_make_ctx())
+
+    req = httpx_mock.get_requests()[0]
+    body = json.loads(req.content)
+    assert body == {"name_prefix": "kratos-lifecycle-key"}
 
     req = httpx_mock.get_requests()[0]
     body = json.loads(req.content)

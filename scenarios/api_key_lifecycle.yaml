@@ -1,0 +1,67 @@
+name: api_key_lifecycle
+description: >-
+  API key lifecycle validation — entirely through the MaaS REST API
+  (/maas-api/v1/api-keys*), no Kubernetes CR read or write at all. Confirms
+  the create response honestly echoes what was requested, that /search
+  actually finds the keys this run created, and that revoking a key denies
+  the very next request rather than after some caching delay (see ADR-019 and
+  docs/architecture/empirical-verification-checklist.md).
+category: "API Key Lifecycle"
+config:
+  key_name: "kratos-lifecycle-key"
+  key_count: 3
+  request_count: 10
+  concurrency: 3
+  prompt: "Hello, world!"
+tasks:
+  - name: provision_api_key
+    params:
+      key_name: "${config.key_name}"
+      count: "${config.key_count}"
+    assertions:
+      name_echo_match_count:
+        promql: "${harness.key_provision_checks.name_echo_match_count}"
+        expect: "== ${config.key_count}"
+      expires_at_present_count:
+        promql: "${harness.key_provision_checks.expires_at_present_count}"
+        expect: "== ${config.key_count}"
+  - name: verify_api_key_search
+    params:
+      name_prefix: "${config.key_name}"
+    assertions:
+      found_count:
+        promql: "${harness.search_check.found_count}"
+        expect: "== ${config.key_count}"
+  - name: send_requests
+    params:
+      count: "${config.request_count}"
+      concurrency: "${config.concurrency}"
+      prompt: "${config.prompt}"
+      key_pool: true
+    # promql pass-through form (ADR-015) — see single_key_load.yaml. Confirms
+    # the keys actually work before revocation, so the next step's failures
+    # can be attributed to revocation rather than the keys never having
+    # worked at all.
+    assertions:
+      error_rate_pct:
+        promql: "${harness.inference_results.error_rate_pct}"
+        expect: "< 5"
+  - name: revoke_api_keys
+    params: {}
+  - name: verify_revoked_key_denied
+    # Registry alias of send_requests (ADR-019) — a second YAML task entry
+    # literally named "send_requests" would collide in the UI's task
+    # pipeline/progress tracking, both keyed by task name.
+    params:
+      count: "${config.request_count}"
+      concurrency: "${config.concurrency}"
+      prompt: "${config.prompt}"
+      key_pool: true
+    assertions:
+      error_rate_pct:
+        promql: "${harness.inference_results.error_rate_pct}"
+        expect: "> 90"
+      unauthorized_count:
+        promql: "${harness.inference_results.unauthorized_count}"
+        expect: "> 0"
+cleanup: automatic

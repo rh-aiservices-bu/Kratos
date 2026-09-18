@@ -24,6 +24,7 @@ afterEach(() => {
 const rateLimitScenario: Scenario = {
   name: 'rate_limit_validation',
   description: 'test',
+  category: 'Rate Limiting',
   config: {
     target_model_name: '',
     target_model_namespace: '',
@@ -34,6 +35,7 @@ const rateLimitScenario: Scenario = {
 const plainScenario: Scenario = {
   name: 'single_key_load',
   description: 'test',
+  category: 'Load Testing',
   config: {
     request_count: 100,
     concurrency: 5,

@@ -17,11 +17,23 @@ _REQUIRED_FIELDS = {"name", "description", "tasks", "cleanup"}
 # once after the pre-run snapshot, harness on every poll tick) — so they're expected
 # to survive here, unlike ${config.x}, which must always be fully resolved by load time.
 _ALLOWED_UNRESOLVED_PREFIXES = ("${baseline.", "${harness.")
+# Mirrors the fixed display order in ui/src/components/ScenarioList.tsx — keeps
+# the two lists from drifting apart silently. "Custom" is the API's own
+# default for any scenario with no `category:` field (api/routes/scenarios.py),
+# so it's deliberately not required on any file here.
+_KNOWN_CATEGORIES = {
+    "Load Testing",
+    "Rate Limiting",
+    "Access Control",
+    "Metrics Validation",
+    "API Key Lifecycle",
+    "Custom",
+}
 
 
-def test_exactly_six_production_scenarios() -> None:
-    assert len(_SCENARIO_PATHS) == 6, (
-        f"Expected 6 scenario files, found {len(_SCENARIO_PATHS)}: "
+def test_exactly_seven_production_scenarios() -> None:
+    assert len(_SCENARIO_PATHS) == 7, (
+        f"Expected 7 scenario files, found {len(_SCENARIO_PATHS)}: "
         f"{[p.name for p in _SCENARIO_PATHS]}"
     )
 
@@ -59,3 +71,32 @@ def test_scenario_tasks_all_in_registry(path: pathlib.Path) -> None:
         assert task_def["name"] in REGISTRY, (
             f"{path.name}: task {task_def['name']!r} is not registered"
         )
+
+
+@pytest.mark.parametrize("path", _SCENARIO_PATHS, ids=[p.stem for p in _SCENARIO_PATHS])
+def test_scenario_declares_known_category(path: pathlib.Path) -> None:
+    raw = yaml.safe_load(path.read_text())
+    category = raw.get("category")
+    assert category in _KNOWN_CATEGORIES, (
+        f"{path.name}: category {category!r} not in {sorted(_KNOWN_CATEGORIES)} "
+        "— update both this test and ui/src/components/ScenarioList.tsx together"
+    )
+
+
+def test_kustomization_scenarios_configmap_matches_directory() -> None:
+    """kustomization.yaml's configMapGenerator lists scenario files by hand
+    (not a glob, unlike this test's own _SCENARIO_PATHS) — a new scenario
+    added to scenarios/ without a matching line here silently never reaches
+    the cluster's kratos-scenarios ConfigMap. Bitten by exactly this twice
+    already (access_denied_no_policy, then api_key_lifecycle); this test
+    exists so a third time fails CI instead of a live deploy.
+    """
+    kustomization = yaml.safe_load(pathlib.Path("kustomization.yaml").read_text())
+    generators = {g["name"]: g for g in kustomization["configMapGenerator"]}
+    listed = {pathlib.Path(f).name for f in generators["kratos-scenarios"]["files"]}
+    on_disk = {p.name for p in _SCENARIO_PATHS}
+    assert listed == on_disk, (
+        f"kustomization.yaml's kratos-scenarios ConfigMap file list is out of sync "
+        f"with scenarios/*.yaml. Missing from kustomization.yaml: {on_disk - listed}. "
+        f"Listed but not on disk: {listed - on_disk}."
+    )

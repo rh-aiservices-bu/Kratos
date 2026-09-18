@@ -32,3 +32,5 @@ Each ADR follows the [Michael Nygard format](https://cognitect.com/blog/2011/11/
 | [ADR-016](ADR-016-graceful-run-stop.md) | Graceful Run Stop via Pod Delete + SIGTERM Handler | Accepted |
 | [ADR-017](ADR-017-maas-cluster-visibility.md) | MaaS Cluster Visibility via Read-Only CustomObjectsApi Reads | Accepted |
 | [ADR-018](ADR-018-access-control-enforcement-testing.md) | Access-Control Enforcement Testing via a Second CRD-Writing Task | Accepted |
+| [ADR-019](ADR-019-rest-only-api-key-lifecycle.md) | REST-Only API Key Lifecycle Validation | Accepted |
+| [ADR-020](ADR-020-scenario-categories.md) | Scenario Categories in the UI | Accepted |
