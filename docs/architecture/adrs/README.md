@@ -31,3 +31,4 @@ Each ADR follows the [Michael Nygard format](https://cognitect.com/blog/2011/11/
 | [ADR-015](ADR-015-promql-native-assertions.md) | PromQL-Native Assertions | Accepted |
 | [ADR-016](ADR-016-graceful-run-stop.md) | Graceful Run Stop via Pod Delete + SIGTERM Handler | Accepted |
 | [ADR-017](ADR-017-maas-cluster-visibility.md) | MaaS Cluster Visibility via Read-Only CustomObjectsApi Reads | Accepted |
+| [ADR-018](ADR-018-access-control-enforcement-testing.md) | Access-Control Enforcement Testing via a Second CRD-Writing Task | Accepted |

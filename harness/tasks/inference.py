@@ -1,7 +1,7 @@
 import asyncio
 import time
 
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI
 
 from harness.result import TaskResult
 from harness.tasks.base import Task, TaskContext
@@ -69,6 +69,8 @@ class SendRequestsTask(Task):
         latencies: list[float] = []
         success = 0
         fail = 0
+        rate_limited_count = 0
+        unauthorized_count = 0
         total_tokens_sent = 0
         prompt_tokens_sent = 0
         completion_tokens_sent = 0
@@ -78,7 +80,7 @@ class SendRequestsTask(Task):
         sem = asyncio.Semaphore(concurrency)
 
         async def do_request(client_idx: int) -> None:
-            nonlocal success, fail, last_emit
+            nonlocal success, fail, last_emit, rate_limited_count, unauthorized_count
             nonlocal total_tokens_sent, prompt_tokens_sent, completion_tokens_sent
             async with sem:
                 t0 = time.monotonic()
@@ -98,6 +100,16 @@ class SendRequestsTask(Task):
                     completion_tokens = getattr(usage, "completion_tokens", None)
                     if isinstance(completion_tokens, (int, float)):
                         completion_tokens_sent += int(completion_tokens)
+                except APIStatusError as exc:
+                    fail += 1
+                    if exc.status_code == 429:
+                        rate_limited_count += 1
+                    elif exc.status_code in (401, 403):
+                        unauthorized_count += 1
+                    print(
+                        f"[send_requests] request failed: status={exc.status_code} {exc}",
+                        flush=True,
+                    )
                 except Exception as exc:
                     fail += 1
                     print(f"[send_requests] request failed: {exc}", flush=True)
@@ -109,6 +121,8 @@ class SendRequestsTask(Task):
                     "total_requests": total,
                     "success_count": success,
                     "fail_count": fail,
+                    "rate_limited_count": rate_limited_count,
+                    "unauthorized_count": unauthorized_count,
                     "error_rate_pct": (fail / total * 100) if total > 0 else 0.0,
                     "throughput_rps": success / elapsed if elapsed > 0 else 0.0,
                     "token_throughput_per_sec": total_tokens_sent / elapsed if elapsed > 0 else 0.0,

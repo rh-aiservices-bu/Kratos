@@ -19,9 +19,9 @@ _REQUIRED_FIELDS = {"name", "description", "tasks", "cleanup"}
 _ALLOWED_UNRESOLVED_PREFIXES = ("${baseline.", "${harness.")
 
 
-def test_exactly_five_production_scenarios() -> None:
-    assert len(_SCENARIO_PATHS) == 5, (
-        f"Expected 5 scenario files, found {len(_SCENARIO_PATHS)}: "
+def test_exactly_six_production_scenarios() -> None:
+    assert len(_SCENARIO_PATHS) == 6, (
+        f"Expected 6 scenario files, found {len(_SCENARIO_PATHS)}: "
         f"{[p.name for p in _SCENARIO_PATHS]}"
     )
 

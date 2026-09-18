@@ -1,10 +1,20 @@
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from openai import APIStatusError
 
 from harness.tasks.base import TaskContext
 from harness.tasks.inference import SendRequestsTask, _distribute, _percentiles
+
+
+def _api_status_error(status_code: int) -> APIStatusError:
+    request = httpx.Request("POST", "http://m.test/v1/chat/completions")
+    response = httpx.Response(status_code, request=request, json={"error": "denied"})
+    return APIStatusError(
+        f"status {status_code}", response=response, body={"error": "denied"}
+    )
 
 
 def _make_ctx(shared_state: dict | None = None) -> TaskContext:
@@ -116,6 +126,51 @@ async def test_send_requests_counts_errors() -> None:
     ir = ctx.shared_state["inference_results"]
     assert ir["fail_count"] == 4
     assert ir["error_rate_pct"] == 100.0
+    assert ir["rate_limited_count"] == 0
+    assert ir["unauthorized_count"] == 0
+
+
+async def test_send_requests_counts_rate_limited_status() -> None:
+    """A 429 APIStatusError is tallied separately from other failures."""
+    with patch("harness.tasks.inference.AsyncOpenAI") as mock_cls:
+        m = MagicMock()
+        m.chat.completions.create = AsyncMock(side_effect=_api_status_error(429))
+        mock_cls.return_value = m
+
+        task = SendRequestsTask(
+            "send_requests",
+            {"count": "3", "concurrency": "2", "url": "http://m.test", "token": "sk-t"},
+        )
+        ctx = _make_ctx()
+        result = await task.run(ctx)
+
+    assert result.status == "PASS"
+    ir = ctx.shared_state["inference_results"]
+    assert ir["fail_count"] == 3
+    assert ir["rate_limited_count"] == 3
+    assert ir["unauthorized_count"] == 0
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+async def test_send_requests_counts_unauthorized_status(status_code: int) -> None:
+    """A 401/403 APIStatusError is tallied as an auth denial, not a rate limit."""
+    with patch("harness.tasks.inference.AsyncOpenAI") as mock_cls:
+        m = MagicMock()
+        m.chat.completions.create = AsyncMock(side_effect=_api_status_error(status_code))
+        mock_cls.return_value = m
+
+        task = SendRequestsTask(
+            "send_requests",
+            {"count": "2", "concurrency": "2", "url": "http://m.test", "token": "sk-t"},
+        )
+        ctx = _make_ctx()
+        result = await task.run(ctx)
+
+    assert result.status == "PASS"
+    ir = ctx.shared_state["inference_results"]
+    assert ir["fail_count"] == 2
+    assert ir["unauthorized_count"] == 2
+    assert ir["rate_limited_count"] == 0
 
 
 async def test_send_requests_debounce() -> None:
