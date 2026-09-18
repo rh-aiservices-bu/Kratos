@@ -14,18 +14,68 @@ const RawYamlModal = lazy(() =>
 
 const POLL_INTERVAL_MS = 25000;
 
-function RateLimitChips({ sub }: { sub: MaasSubscription }) {
+// Mirrors ModelsTab.tsx's AuthPolicyBadge — a MaaSSubscription only grants
+// quota, never gateway access (see api/maas_client.py:list_subscriptions), so
+// a missing auth policy here means this subscription's owners have quota but
+// can't actually reach the model. Kept local rather than shared/imported
+// since each maas/ tab is otherwise self-contained.
+function AuthPolicyBadge({ hasAuthPolicy }: { hasAuthPolicy: boolean | null }) {
+  if (hasAuthPolicy === null) {
+    return <span style={{ fontSize: '0.75rem', color: '#888' }}>auth policy: unknown</span>;
+  }
+  return (
+    <Label isCompact color={hasAuthPolicy ? 'green' : 'orange'}>
+      {hasAuthPolicy ? '✓ has auth policy' : '⚠ no auth policy'}
+    </Label>
+  );
+}
+
+// A subscription doesn't create the MaaSModelRef it references (that's done
+// by publishing a model, see Catalog item B) — so the reference can dangle
+// (renamed/deleted model) without this subscription's own status reflecting
+// it. Surfaced here rather than silently falling back to the raw name.
+function ModelRefBadge({ modelExists, modelReady }: { modelExists: boolean | null; modelReady: boolean | null }) {
+  if (modelExists === false) {
+    return (
+      <Label isCompact color="red">
+        ⚠ model not found
+      </Label>
+    );
+  }
+  if (modelExists === null) {
+    return <span style={{ fontSize: '0.75rem', color: '#888' }}>model: unknown</span>;
+  }
+  if (modelReady === false) {
+    return (
+      <Label isCompact color="orange">
+        ⚠ model not ready
+      </Label>
+    );
+  }
+  return null;
+}
+
+function ModelCoverageList({ sub }: { sub: MaasSubscription }) {
   if (sub.models.length === 0) return <span style={{ color: '#888' }}>—</span>;
   return (
     <>
       {sub.models.map((m) => (
-        <div key={`${m.namespace}/${m.name}`} style={{ marginBottom: '0.2rem' }}>
-          <span style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{m.name}</span>
-          {m.token_rate_limits.map((rl, i) => (
-            <Label key={i} isCompact style={{ marginLeft: '0.4rem' }}>
-              {rl.limit} / {rl.window}
-            </Label>
-          ))}
+        <div key={`${m.namespace}/${m.name}`} style={{ marginBottom: '0.5rem' }}>
+          <div>
+            <span style={{ fontWeight: 600 }}>{m.display_name}</span>{' '}
+            <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: '#888' }}>
+              ({m.namespace}/{m.name})
+            </span>
+          </div>
+          <div style={{ marginTop: '0.15rem' }}>
+            {m.token_rate_limits.map((rl, i) => (
+              <Label key={i} isCompact style={{ marginRight: '0.3rem' }}>
+                {rl.limit} / {rl.window}
+              </Label>
+            ))}
+            <ModelRefBadge modelExists={m.model_exists} modelReady={m.model_ready} />{' '}
+            <AuthPolicyBadge hasAuthPolicy={m.has_auth_policy} />
+          </div>
         </div>
       ))}
     </>
@@ -89,7 +139,7 @@ export function SubscriptionsTab() {
             <Th>Name</Th>
             <Th>Priority</Th>
             <Th>Phase</Th>
-            <Th>Rate limits by model</Th>
+            <Th modifier="wrap">Models (rate limit, ref status, auth policy)</Th>
             <Th>Granted to</Th>
             <Th screenReaderText="Actions" />
           </Tr>
@@ -119,7 +169,7 @@ export function SubscriptionsTab() {
                     {sub.phase ?? 'Unknown'}
                   </Label>
                 </Td>
-                <Td><RateLimitChips sub={sub} /></Td>
+                <Td><ModelCoverageList sub={sub} /></Td>
                 <Td><OwnerChips owner={sub.owner} /></Td>
                 <Td>
                   <Button variant="link" isInline onClick={() => setYamlSub(sub)}>

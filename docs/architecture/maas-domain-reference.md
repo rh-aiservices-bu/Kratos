@@ -45,6 +45,8 @@ spec:
 
 Cross-check: `GET /v1/models` (MaaS REST) returns a `subscriptions[]` array per model (`name`, `displayName`, `description`) — a thinner reverse-index of the same relationship, useful to confirm the REST view matches the CRD view.
 
+**A `MaaSSubscription` does not create either object it depends on.** It only *references* a `MaaSModelRef` by name/namespace (`spec.modelRefs[]`) and shares owners with a `MaaSAuthPolicy` by coincidence of configuration, not by any create-together mechanism — confirmed both by reading `harness/tasks/subscription.py` (`ApplyRateLimitSubscriptionTask`) and `harness/tasks/access_policy.py` (`ApplyAuthPolicyTask`), which are two entirely separate tasks, never both invoked by the same scenario (`access_denied_no_policy` deliberately creates a subscription *without* an auth policy, specifically to test that failure mode — see ADR-018). A `MaaSModelRef` is created separately, by publishing a model (see the governance-pairing rule above); nothing in this domain creates one from a subscription. Because of this, `list_subscriptions()` now resolves and displays, per referenced model: whether the `MaaSModelRef` actually exists (`model_exists`) and is ready (`model_ready`), and whether a `MaaSAuthPolicy` matching this subscription's own owners covers that model (`has_auth_policy`) — so a dangling model reference or a missing auth policy is visible directly on the subscription that would otherwise silently have no effect, without cross-referencing the Models/Access Control tabs by hand.
+
 ## B. Models — ✅ in UI
 
 Three sources, merged (see `api/maas_client.py:list_models`):

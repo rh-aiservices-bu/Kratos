@@ -131,7 +131,17 @@ export interface MaasSubscription {
   description: string;
   priority: number | null;
   owner: { groups: string[]; users: string[] };
-  models: { name: string; namespace: string; token_rate_limits: MaasTokenRateLimit[] }[];
+  models: {
+    name: string;
+    namespace: string;
+    token_rate_limits: MaasTokenRateLimit[];
+    display_name: string;
+    // model_exists is null only when MaaSModelRef couldn't be read at all
+    // (RBAC/connectivity) — false means the reference is genuinely dangling.
+    model_exists: boolean | null;
+    model_ready: boolean | null;
+    has_auth_policy: boolean | null;
+  }[];
   phase: string | null;
   ready: boolean;
   priority_conflict: boolean;

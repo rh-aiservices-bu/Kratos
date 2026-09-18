@@ -33,6 +33,10 @@ const baseSubscription: MaasSubscription = {
       name: 'facebook-opt-125m-simulated',
       namespace: 'llm',
       token_rate_limits: [{ limit: 100, window: '1m' }],
+      display_name: 'Facebook OPT 125M (Simulated)',
+      model_exists: true,
+      model_ready: true,
+      has_auth_policy: true,
     },
   ],
   phase: 'Active',
@@ -59,9 +63,35 @@ test('renders subscription rows with priority, phase, and rate limits', async ()
   expect(await screen.findByText('Simulator Free Tier')).toBeInTheDocument();
   expect(screen.getByText('10')).toBeInTheDocument();
   expect(screen.getByText('Active')).toBeInTheDocument();
-  expect(screen.getByText('facebook-opt-125m-simulated')).toBeInTheDocument();
+  expect(screen.getByText('Facebook OPT 125M (Simulated)')).toBeInTheDocument();
+  expect(screen.getByText('(llm/facebook-opt-125m-simulated)')).toBeInTheDocument();
   expect(screen.getByText('100 / 1m')).toBeInTheDocument();
+  expect(screen.getByText('✓ has auth policy')).toBeInTheDocument();
   expect(screen.getByText('system:authenticated')).toBeInTheDocument();
+});
+
+test('flags a missing auth policy on a covered model', async () => {
+  const noAuthPolicy: MaasSubscription = {
+    ...baseSubscription,
+    models: [{ ...baseSubscription.models[0], has_auth_policy: false }],
+  };
+  mockGetSubscriptions.mockResolvedValue({ available: true, reason: null, items: [noAuthPolicy] });
+
+  render(<SubscriptionsTab />);
+
+  expect(await screen.findByText('⚠ no auth policy')).toBeInTheDocument();
+});
+
+test('flags a dangling model reference', async () => {
+  const danglingRef: MaasSubscription = {
+    ...baseSubscription,
+    models: [{ ...baseSubscription.models[0], model_exists: false, model_ready: null }],
+  };
+  mockGetSubscriptions.mockResolvedValue({ available: true, reason: null, items: [danglingRef] });
+
+  render(<SubscriptionsTab />);
+
+  expect(await screen.findByText('⚠ model not found')).toBeInTheDocument();
 });
 
 test('flags a priority conflict', async () => {

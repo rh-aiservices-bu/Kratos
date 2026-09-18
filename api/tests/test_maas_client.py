@@ -174,6 +174,84 @@ _AUTH_POLICY_COVERING_MODEL = {
 }
 
 
+def test_list_subscriptions_enriches_models_with_ref_and_auth_policy() -> None:
+    """A subscription's model entries should surface the referenced
+    MaaSModelRef's display name/readiness and whether a matching
+    MaaSAuthPolicy exists for the subscription's own owners — this is what
+    lets an admin spot a missing/broken auth policy or a dangling model
+    reference directly on the subscription, without cross-referencing tabs."""
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "maassubscriptions":
+            return {"items": [_SUBSCRIPTION_FREE]}
+        if plural == "maasmodelrefs":
+            return {"items": [_MODELREF]}
+        if plural == "maasauthpolicies":
+            return {"items": [_AUTH_POLICY_COVERING_MODEL]}
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_subscriptions()
+
+    model = result.items[0]["models"][0]
+    assert model["display_name"] == "Facebook OPT 125M (Simulated)"
+    assert model["model_exists"] is True
+    assert model["model_ready"] is True
+    assert model["has_auth_policy"] is True
+
+
+def test_list_subscriptions_flags_missing_auth_policy_and_dangling_model_ref() -> None:
+    """No MaaSAuthPolicy covers this subscription's owner/model, and the
+    referenced MaaSModelRef doesn't even exist — both must read as concrete
+    False (not None), since both CRDs *were* readable."""
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "maassubscriptions":
+            return {"items": [_SUBSCRIPTION_FREE]}
+        if plural in ("maasmodelrefs", "maasauthpolicies"):
+            return {"items": []}
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_subscriptions()
+
+    model = result.items[0]["models"][0]
+    assert model["display_name"] == "facebook-opt-125m-simulated"
+    assert model["model_exists"] is False
+    assert model["model_ready"] is None
+    assert model["has_auth_policy"] is False
+
+
+def test_list_subscriptions_model_ref_and_auth_policy_unknown_when_unreadable() -> None:
+    """'Unknown' (RBAC/read failure on the cross-referenced CRD) must never
+    collapse into 'confirmed missing' — None, not False."""
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "maassubscriptions":
+            return {"items": [_SUBSCRIPTION_FREE]}
+        if plural in ("maasmodelrefs", "maasauthpolicies"):
+            raise ApiException(status=403)
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_subscriptions()
+
+    model = result.items[0]["models"][0]
+    assert model["display_name"] == "facebook-opt-125m-simulated"
+    assert model["model_exists"] is None
+    assert model["model_ready"] is None
+    assert model["has_auth_policy"] is None
+
+
 def test_list_models_merges_modelref_llmisvc_and_rest(monkeypatch) -> None:
     monkeypatch.setenv("MAAS_API_URL", "https://maas.example.com")
     monkeypatch.setattr(maas_client, "sa_token", lambda: "test-token")

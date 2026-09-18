@@ -186,9 +186,45 @@ def _to_yaml(obj: dict) -> str:
 
 
 def list_subscriptions() -> ResourceList:
+    """`MaaSSubscription` grants quota — it does NOT create the `MaaSModelRef`s
+    it references (those are created separately, by publishing a model, see
+    Catalog item B) nor the `MaaSAuthPolicy` that governs gateway access for
+    the same owners (a separate, independently-created object, see Catalog
+    item C — nothing in this codebase creates one automatically alongside a
+    subscription). Both are looked up here purely for *display*, per-model,
+    so a dangling model reference or a missing auth policy is visible right
+    on the subscription that would otherwise silently have no effect.
+    """
     result = _list(_MAAS_GROUP, _MAAS_VERSION, "maassubscriptions")
     if not result.available:
         return result
+
+    modelrefs_result = _list(_MAAS_GROUP, _MAAS_VERSION, "maasmodelrefs")
+    modelref_by_key: dict[tuple[str | None, str | None], dict] | None = None
+    if modelrefs_result.available:
+        modelref_by_key = {}
+        for cr in modelrefs_result.items:
+            meta = cr.get("metadata", {})
+            annotations = meta.get("annotations", {})
+            modelref_by_key[(meta.get("namespace"), meta.get("name"))] = {
+                "display_name": annotations.get("openshift.io/display-name", meta.get("name")),
+                "ready": _is_ready(cr.get("status", {}).get("conditions", [])),
+            }
+
+    auth_result = list_auth_policies()
+    auth_items = auth_result.items if auth_result.available else None
+
+    def _has_matching_auth_policy(owner: dict, namespace: str | None, name: str | None) -> bool | None:
+        if auth_items is None:
+            return None
+        owner_names = set(owner["groups"]) | set(owner["users"])
+        for policy in auth_items:
+            policy_names = set(policy["owner"]["groups"]) | set(policy["owner"]["users"])
+            if owner_names & policy_names and any(
+                m["namespace"] == namespace and m["name"] == name for m in policy["models"]
+            ):
+                return True
+        return False
 
     shaped = []
     for cr in result.items:
@@ -199,6 +235,28 @@ def list_subscriptions() -> ResourceList:
         conditions = status.get("conditions", [])
         conflict_cond = _condition(conditions, "SpecPriorityDuplicate")
 
+        owner = {
+            "groups": [g.get("name") for g in (spec.get("owner", {}).get("groups") or [])],
+            "users": spec.get("owner", {}).get("users") or [],
+        }
+
+        models = []
+        for m in spec.get("modelRefs") or []:
+            m_name, m_namespace = m.get("name"), m.get("namespace")
+            ref_info = modelref_by_key.get((m_namespace, m_name)) if modelref_by_key is not None else None
+            model_exists = (ref_info is not None) if modelref_by_key is not None else None
+            models.append(
+                {
+                    "name": m_name,
+                    "namespace": m_namespace,
+                    "token_rate_limits": m.get("tokenRateLimits") or [],
+                    "display_name": ref_info["display_name"] if ref_info else m_name,
+                    "model_exists": model_exists,
+                    "model_ready": ref_info["ready"] if ref_info else None,
+                    "has_auth_policy": _has_matching_auth_policy(owner, m_namespace, m_name),
+                }
+            )
+
         shaped.append(
             {
                 "name": meta.get("name"),
@@ -206,18 +264,8 @@ def list_subscriptions() -> ResourceList:
                 "display_name": annotations.get("openshift.io/display-name", meta.get("name")),
                 "description": annotations.get("openshift.io/description", ""),
                 "priority": spec.get("priority"),
-                "owner": {
-                    "groups": [g.get("name") for g in (spec.get("owner", {}).get("groups") or [])],
-                    "users": spec.get("owner", {}).get("users") or [],
-                },
-                "models": [
-                    {
-                        "name": m.get("name"),
-                        "namespace": m.get("namespace"),
-                        "token_rate_limits": m.get("tokenRateLimits") or [],
-                    }
-                    for m in (spec.get("modelRefs") or [])
-                ],
+                "owner": owner,
+                "models": models,
                 "phase": status.get("phase"),
                 "ready": _is_ready(conditions),
                 "priority_conflict": bool(conflict_cond and conflict_cond.get("status") == "True"),
