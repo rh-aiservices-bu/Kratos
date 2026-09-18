@@ -45,6 +45,7 @@ const baseModel: MaasModel = {
   serving: { replicas: 1, resources: null, conditions: [] },
   raw: {},
   raw_yaml: 'maasModelRef:\n  kind: MaaSModelRef\n',
+  serving_raw_yaml: 'kind: LLMInferenceService\nmetadata:\n  name: facebook-opt-125m-simulated\n',
 };
 
 test('shows an unavailable notice when the SA lacks RBAC', async () => {
@@ -128,6 +129,7 @@ test('shows an External badge for externally-hosted models', async () => {
     kind: 'ExternalModel',
     hosting: 'external',
     serving: null,
+    serving_raw_yaml: null,
   };
   mockGetModels.mockResolvedValue({ available: true, reason: null, items: [external] });
 
@@ -145,6 +147,7 @@ test('flags a correctly-labeled external provider credential secret', async () =
     kind: 'ExternalModel',
     hosting: 'external',
     serving: null,
+    serving_raw_yaml: null,
     external_providers: [
       {
         provider_name: 'openai',
@@ -154,6 +157,7 @@ test('flags a correctly-labeled external provider credential secret', async () =
         endpoint: 'api.openai.com',
         credential_secret_name: 'openai-api-key',
         credential_secret_label_ok: true,
+        raw_yaml: 'kind: ExternalProvider\nmetadata:\n  name: openai\n',
       },
     ],
   };
@@ -166,12 +170,63 @@ test('flags a correctly-labeled external provider credential secret', async () =
   expect(screen.getByText('✓ credential secret labeled')).toBeInTheDocument();
 });
 
+test('clicking a provider\'s View YAML link opens its own raw YAML', async () => {
+  const external: MaasModel = {
+    ...baseModel,
+    name: 'gpt-4o-proxy',
+    display_name: 'GPT-4o (external)',
+    kind: 'ExternalModel',
+    hosting: 'external',
+    serving: null,
+    serving_raw_yaml: null,
+    external_providers: [
+      {
+        provider_name: 'openai',
+        target_model: 'gpt-4o-mini',
+        api_format: 'openai-chat',
+        path: '/v1/chat/completions',
+        endpoint: 'api.openai.com',
+        credential_secret_name: 'openai-api-key',
+        credential_secret_label_ok: true,
+        raw_yaml: 'kind: ExternalProvider\nmetadata:\n  name: openai\n',
+      },
+    ],
+  };
+  mockGetModels.mockResolvedValue({ available: true, reason: null, items: [external] });
+
+  render(<ModelsTab />);
+
+  // Three "View YAML" links exist on this row: the provider's, the auth
+  // policy's, and the model's own — the provider's is first, since the
+  // External provider column renders before Auth policy and Actions.
+  const viewYamlLinks = await screen.findAllByRole('button', { name: /^view yaml$/i });
+  expect(viewYamlLinks).toHaveLength(3);
+  fireEvent.click(viewYamlLinks[0]);
+
+  const modal = await screen.findByTestId('raw-yaml-modal');
+  expect(modal).toHaveTextContent('Provider: openai');
+  expect(modal).toHaveTextContent('kind: ExternalProvider');
+});
+
+test('clicking View Deployment YAML opens the LLMInferenceService raw YAML', async () => {
+  mockGetModels.mockResolvedValue({ available: true, reason: null, items: [baseModel] });
+
+  render(<ModelsTab />);
+
+  fireEvent.click(await screen.findByRole('button', { name: /view deployment yaml/i }));
+
+  const modal = await screen.findByTestId('raw-yaml-modal');
+  expect(modal).toHaveTextContent('Deployment: Facebook OPT 125M (Simulated)');
+  expect(modal).toHaveTextContent('kind: LLMInferenceService');
+});
+
 test('flags an external provider whose credential secret is missing the required label', async () => {
   const external: MaasModel = {
     ...baseModel,
     name: 'gpt-4o-proxy',
     hosting: 'external',
     serving: null,
+    serving_raw_yaml: null,
     external_providers: [
       {
         provider_name: 'openai',
@@ -181,6 +236,7 @@ test('flags an external provider whose credential secret is missing the required
         endpoint: null,
         credential_secret_name: 'openai-api-key',
         credential_secret_label_ok: false,
+        raw_yaml: null,
       },
     ],
   };
@@ -197,6 +253,7 @@ test('shows unknown when the credential secret cannot be read', async () => {
     name: 'gpt-4o-proxy',
     hosting: 'external',
     serving: null,
+    serving_raw_yaml: null,
     external_providers: [
       {
         provider_name: 'openai',
@@ -206,6 +263,7 @@ test('shows unknown when the credential secret cannot be read', async () => {
         endpoint: null,
         credential_secret_name: 'openai-api-key',
         credential_secret_label_ok: null,
+        raw_yaml: null,
       },
     ],
   };

@@ -185,31 +185,46 @@ def _to_yaml(obj: dict) -> str:
     return yaml.safe_dump(obj, sort_keys=False, default_flow_style=False)
 
 
+def _modelref_lookup() -> dict[tuple[str | None, str | None], dict] | None:
+    """`{(namespace, name): {display_name, ready}}` built from a live
+    `maasmodelrefs` list — shared by `list_subscriptions()`/`list_auth_policies()`
+    so each can resolve its own `spec.modelRefs[]` entries against the real
+    MaaSModelRef catalog (a dangling reference is a real misconfiguration on
+    either side). `None` only when the read itself failed — never collapsed
+    into "no model refs exist."
+    """
+    modelrefs_result = _list(_MAAS_GROUP, _MAAS_VERSION, "maasmodelrefs")
+    if not modelrefs_result.available:
+        return None
+    lookup: dict[tuple[str | None, str | None], dict] = {}
+    for cr in modelrefs_result.items:
+        meta = cr.get("metadata", {})
+        annotations = meta.get("annotations", {})
+        lookup[(meta.get("namespace"), meta.get("name"))] = {
+            "display_name": annotations.get("openshift.io/display-name", meta.get("name")),
+            "ready": _is_ready(cr.get("status", {}).get("conditions", [])),
+        }
+    return lookup
+
+
 def list_subscriptions() -> ResourceList:
     """`MaaSSubscription` grants quota — it does NOT create the `MaaSModelRef`s
     it references (those are created separately, by publishing a model, see
-    Catalog item B) nor the `MaaSAuthPolicy` that governs gateway access for
-    the same owners (a separate, independently-created object, see Catalog
-    item C — nothing in this codebase creates one automatically alongside a
-    subscription). Both are looked up here purely for *display*, per-model,
-    so a dangling model reference or a missing auth policy is visible right
-    on the subscription that would otherwise silently have no effect.
+    Catalog item B). It also does not create the `MaaSAuthPolicy` that governs
+    gateway access for the same owners at the CRD/controller level — though
+    the RHOAI Dashboard's own subscription-creation UI flow does auto-create
+    one as a one-time convenience (verified live; see Catalog item A) — either
+    way a `MaaSAuthPolicy` is an independently-existing object, not something
+    this function can assume exists. Both are looked up here purely for
+    *display*, per-model, so a dangling model reference or a missing auth
+    policy is visible right on the subscription that would otherwise silently
+    have no effect.
     """
     result = _list(_MAAS_GROUP, _MAAS_VERSION, "maassubscriptions")
     if not result.available:
         return result
 
-    modelrefs_result = _list(_MAAS_GROUP, _MAAS_VERSION, "maasmodelrefs")
-    modelref_by_key: dict[tuple[str | None, str | None], dict] | None = None
-    if modelrefs_result.available:
-        modelref_by_key = {}
-        for cr in modelrefs_result.items:
-            meta = cr.get("metadata", {})
-            annotations = meta.get("annotations", {})
-            modelref_by_key[(meta.get("namespace"), meta.get("name"))] = {
-                "display_name": annotations.get("openshift.io/display-name", meta.get("name")),
-                "ready": _is_ready(cr.get("status", {}).get("conditions", [])),
-            }
+    modelref_by_key = _modelref_lookup()
 
     auth_result = list_auth_policies()
     auth_items = auth_result.items if auth_result.available else None
@@ -393,10 +408,6 @@ def list_models() -> ResourceList:
                     "conditions": llm_status.get("conditions", []),
                 }
 
-        yaml_doc = {"maasModelRef": cr}
-        if llm_isvc:
-            yaml_doc["llmInferenceService"] = llm_isvc
-
         model_auth_policies = _auth_policies_for(namespace, name)
 
         shaped.append(
@@ -427,7 +438,12 @@ def list_models() -> ResourceList:
                 "external_providers": [],
                 "serving": serving,
                 "raw": cr,
-                "raw_yaml": _to_yaml(yaml_doc),
+                # Just the MaaSModelRef's own YAML — the backing
+                # LLMInferenceService (a separate real object) gets its own
+                # serving_raw_yaml below rather than being merged into one
+                # synthetic multi-object document.
+                "raw_yaml": _to_yaml(cr),
+                "serving_raw_yaml": _to_yaml(llm_isvc) if llm_isvc else None,
             }
         )
 
@@ -439,7 +455,6 @@ def list_models() -> ResourceList:
         name, namespace = meta.get("name"), meta.get("namespace")
 
         resolved_providers = []
-        referenced_provider_crs = []
         for pref in spec.get("externalProviderRefs") or []:
             ref = pref.get("ref", {})
             provider_name = ref.get("name")
@@ -454,8 +469,6 @@ def list_models() -> ResourceList:
                 _secret_has_label(namespace, secret_name, _CREDENTIAL_SECRET_LABEL)
                 if secret_name else None
             )
-            if provider_cr is not None:
-                referenced_provider_crs.append(provider_cr)
             resolved_providers.append(
                 {
                     "provider_name": provider_name,
@@ -465,12 +478,12 @@ def list_models() -> ResourceList:
                     "endpoint": provider_spec.get("endpoint"),
                     "credential_secret_name": secret_name,
                     "credential_secret_label_ok": secret_label_ok,
+                    # This provider's own ExternalProvider CR YAML alone —
+                    # None when it couldn't be resolved, not merged into the
+                    # ExternalModel's own raw_yaml below.
+                    "raw_yaml": _to_yaml(provider_cr) if provider_cr is not None else None,
                 }
             )
-
-        yaml_doc = {"externalModel": cr}
-        if referenced_provider_crs:
-            yaml_doc["externalProviders"] = referenced_provider_crs
 
         model_auth_policies = _auth_policies_for(namespace, name)
 
@@ -495,7 +508,10 @@ def list_models() -> ResourceList:
                 "external_providers": resolved_providers,
                 "serving": None,
                 "raw": cr,
-                "raw_yaml": _to_yaml(yaml_doc),
+                # Just the ExternalModel's own YAML — each provider's YAML is
+                # on its own external_providers[] entry (raw_yaml above).
+                "raw_yaml": _to_yaml(cr),
+                "serving_raw_yaml": None,
             }
         )
 
@@ -507,11 +523,18 @@ def list_auth_policies() -> ResourceList:
     quota). Shaped to mirror `list_subscriptions()` (`owner.{groups,users}`,
     per-model `model_refs[]`) so the two can be compared model-by-model the
     same way — see Catalog item C and `resolve_access()`, which is exactly
-    that comparison for a candidate set of groups.
+    that comparison for a candidate set of groups. Also backs its own
+    "Authorization Policies" tab, listing every `MaaSAuthPolicy` CR directly —
+    it's an independently-created object (see Catalog item A's correction:
+    the RHOAI Dashboard auto-creates one alongside a subscription as a
+    one-time convenience, but nothing enforces that pairing afterwards),
+    so it gets the same direct-listing treatment `list_subscriptions()` does.
     """
     result = _list(_MAAS_GROUP, _MAAS_VERSION, "maasauthpolicies")
     if not result.available:
         return result
+
+    modelref_by_key = _modelref_lookup()
 
     shaped = []
     for cr in result.items:
@@ -520,19 +543,34 @@ def list_auth_policies() -> ResourceList:
         status = cr.get("status", {})
         annotations = meta.get("annotations", {})
         subjects = spec.get("subjects", {})
+
+        model_refs = []
+        for m in spec.get("modelRefs") or []:
+            m_name, m_namespace = m.get("name"), m.get("namespace")
+            ref_info = modelref_by_key.get((m_namespace, m_name)) if modelref_by_key is not None else None
+            model_exists = (ref_info is not None) if modelref_by_key is not None else None
+            model_refs.append(
+                {
+                    "name": m_name,
+                    "namespace": m_namespace,
+                    "display_name": ref_info["display_name"] if ref_info else m_name,
+                    "model_exists": model_exists,
+                    "model_ready": ref_info["ready"] if ref_info else None,
+                }
+            )
+
         shaped.append(
             {
                 "name": meta.get("name"),
                 "namespace": meta.get("namespace"),
                 "display_name": annotations.get("openshift.io/display-name", meta.get("name")),
+                "description": annotations.get("openshift.io/description", ""),
                 "owner": {
                     "groups": [g.get("name") for g in (subjects.get("groups") or [])],
                     "users": subjects.get("users") or [],
                 },
-                "model_refs": [
-                    {"name": m.get("name"), "namespace": m.get("namespace")}
-                    for m in (spec.get("modelRefs") or [])
-                ],
+                "model_refs": model_refs,
+                "phase": status.get("phase"),
                 "ready": _is_ready(status.get("conditions", [])),
                 "raw_yaml": _to_yaml(cr),
             }

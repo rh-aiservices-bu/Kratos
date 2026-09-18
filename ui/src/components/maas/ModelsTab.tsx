@@ -137,8 +137,17 @@ function HostingBadge({ model }: { model: MaasModel }) {
 // Own column, not nested under Hosting — an external model's provider(s) and
 // whether their credential Secret is correctly labeled (RHOAI 3.5+; see
 // docs/architecture/maas-domain-reference.md Catalog item B) is a distinct
-// question from how the model is served.
-function ExternalProviderCell({ providers }: { providers: MaasModel['external_providers'] }) {
+// question from how the model is served. Each provider's own "View YAML"
+// link lives right here, next to that specific provider — not lumped into
+// the model's own Actions column — since it opens a different CR (the
+// resolved ExternalProvider, not the ExternalModel).
+function ExternalProviderCell({
+  providers,
+  onSelect,
+}: {
+  providers: MaasModel['external_providers'];
+  onSelect: (target: YamlTarget) => void;
+}) {
   if (providers.length === 0) return <span style={{ color: '#888' }}>—</span>;
   return (
     <>
@@ -160,6 +169,24 @@ function ExternalProviderCell({ providers }: { providers: MaasModel['external_pr
             </Label>
           ) : (
             <span style={{ fontSize: '0.72rem', color: '#888' }}>no credential secret configured</span>
+          )}
+          {p.raw_yaml !== null && (
+            <div>
+              <Button
+                variant="link"
+                isInline
+                style={{ fontSize: '0.75rem' }}
+                onClick={() =>
+                  onSelect({
+                    title: `Provider: ${p.provider_name ?? 'unknown provider'}`,
+                    downloadFileName: `${p.provider_name ?? 'provider'}.yaml`,
+                    yamlText: p.raw_yaml as string,
+                  })
+                }
+              >
+                View YAML
+              </Button>
+            </div>
           )}
         </div>
       ))}
@@ -228,7 +255,7 @@ export function ModelsTab() {
                 </Td>
                 <Td><NamespaceCell model={model} /></Td>
                 <Td><HostingBadge model={model} /></Td>
-                <Td><ExternalProviderCell providers={model.external_providers} /></Td>
+                <Td><ExternalProviderCell providers={model.external_providers} onSelect={setYamlTarget} /></Td>
                 <Td>
                   <Label isCompact color={model.ready ? 'green' : 'red'}>
                     {model.phase ?? (model.ready ? 'Ready' : 'Not ready')}
@@ -250,19 +277,39 @@ export function ModelsTab() {
                   />
                 </Td>
                 <Td>
-                  <Button
-                    variant="link"
-                    isInline
-                    onClick={() =>
-                      setYamlTarget({
-                        title: `Model: ${model.display_name}`,
-                        downloadFileName: `${model.name}.yaml`,
-                        yamlText: model.raw_yaml,
-                      })
-                    }
-                  >
-                    View YAML
-                  </Button>
+                  <div>
+                    <Button
+                      variant="link"
+                      isInline
+                      onClick={() =>
+                        setYamlTarget({
+                          title: `Model: ${model.display_name}`,
+                          downloadFileName: `${model.name}.yaml`,
+                          yamlText: model.raw_yaml,
+                        })
+                      }
+                    >
+                      View YAML
+                    </Button>
+                  </div>
+                  {model.serving_raw_yaml !== null && (
+                    <div>
+                      <Button
+                        variant="link"
+                        isInline
+                        style={{ fontSize: '0.75rem' }}
+                        onClick={() =>
+                          setYamlTarget({
+                            title: `Deployment: ${model.display_name}`,
+                            downloadFileName: `${model.name}-deployment.yaml`,
+                            yamlText: model.serving_raw_yaml as string,
+                          })
+                        }
+                      >
+                        View Deployment YAML
+                      </Button>
+                    </div>
+                  )}
                 </Td>
               </Tr>
             ))

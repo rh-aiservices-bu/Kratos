@@ -342,8 +342,12 @@ def test_list_models_merges_modelref_llmisvc_and_rest(monkeypatch) -> None:
         {"name": "simulator-free", "display_name": "Simulator Free Tier", "description": "..."}
     ]
     assert model["serving"]["replicas"] == 1
-    assert "maasModelRef" in model["raw_yaml"]
-    assert "llmInferenceService" in model["raw_yaml"]
+    # raw_yaml is just the MaaSModelRef's own YAML; the backing
+    # LLMInferenceService gets its own serving_raw_yaml, not merged in.
+    assert "facebook-opt-125m-simulated" in model["raw_yaml"]
+    assert "llmInferenceService" not in model["raw_yaml"]
+    assert model["serving_raw_yaml"] is not None
+    assert "replicas: 1" in model["serving_raw_yaml"]
     assert model["has_auth_policy"] is True
     assert model["auth_policies"] == [
         {
@@ -516,8 +520,13 @@ def test_list_models_external_model_35_resolves_provider() -> None:
     assert provider["credential_secret_name"] == "openai-api-key"
     assert provider["credential_secret_label_ok"] is True
     core_api.read_namespaced_secret.assert_called_once_with("openai-api-key", "external-models")
-    assert "externalModel" in model["raw_yaml"]
-    assert "externalProviders" in model["raw_yaml"]
+    # raw_yaml is just the ExternalModel's own YAML; each provider carries
+    # its own raw_yaml (below), not merged into the model's.
+    assert "gpt-4o-mini" in model["raw_yaml"]
+    assert "api.openai.com" not in model["raw_yaml"]
+    assert model["serving_raw_yaml"] is None
+    assert provider["raw_yaml"] is not None
+    assert "api.openai.com" in provider["raw_yaml"]
 
 
 def test_list_models_flags_credential_secret_missing_label() -> None:
@@ -582,6 +591,7 @@ def test_list_models_external_model_without_resolvable_provider() -> None:
     assert provider["provider_name"] == "openai"
     assert provider["endpoint"] is None
     assert provider["credential_secret_name"] is None
+    assert provider["raw_yaml"] is None
     assert model["endpoint"] is None
 
 
@@ -646,6 +656,11 @@ def _access_api(subscriptions: list[dict], auth_policies: list[dict], groups: li
             return {"items": subscriptions}
         if plural == "maasauthpolicies":
             return {"items": auth_policies}
+        if plural == "maasmodelrefs":
+            # list_subscriptions()/list_auth_policies() both resolve their
+            # model_refs[] against a live maasmodelrefs list — irrelevant to
+            # what these list_access() tests are checking, so empty is fine.
+            return {"items": []}
         if plural == "groups":
             if isinstance(groups, Exception):
                 raise groups
@@ -657,7 +672,20 @@ def _access_api(subscriptions: list[dict], auth_policies: list[dict], groups: li
 
 
 def test_list_auth_policies_shapes_fields() -> None:
-    api = _mock_customobjects_api({"items": [_auth_policy("ap-a", "team-a", "model-x")]})
+    policy_cr = _auth_policy("ap-a", "team-a", "model-x")
+    policy_cr["metadata"]["annotations"] = {"openshift.io/description": "Access for team-a"}
+    policy_cr["status"]["phase"] = "Active"
+
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "maasauthpolicies":
+            return {"items": [policy_cr]}
+        if plural == "maasmodelrefs":
+            return {"items": []}
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
     with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
          patch.object(maas_client, "_kube"):
         result = maas_client.list_auth_policies()
@@ -665,9 +693,64 @@ def test_list_auth_policies_shapes_fields() -> None:
     assert result.available
     policy = result.items[0]
     assert policy["name"] == "ap-a"
+    assert policy["description"] == "Access for team-a"
+    assert policy["phase"] == "Active"
     assert policy["owner"]["groups"] == ["team-a"]
-    assert policy["model_refs"] == [{"name": "model-x", "namespace": "llm"}]
     assert policy["ready"] is True
+
+    model_ref = policy["model_refs"][0]
+    assert model_ref["name"] == "model-x"
+    assert model_ref["namespace"] == "llm"
+    # maasmodelrefs read succeeded but had nothing matching — a genuine
+    # dangling reference, not "couldn't tell."
+    assert model_ref["model_exists"] is False
+    assert model_ref["model_ready"] is None
+    assert model_ref["display_name"] == "model-x"
+
+
+def test_list_auth_policies_resolves_existing_model_ref() -> None:
+    policy_cr = _auth_policy("ap-a", "team-a", "facebook-opt-125m-simulated", "llm")
+
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "maasauthpolicies":
+            return {"items": [policy_cr]}
+        if plural == "maasmodelrefs":
+            return {"items": [_MODELREF]}
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_auth_policies()
+
+    model_ref = result.items[0]["model_refs"][0]
+    assert model_ref["model_exists"] is True
+    assert model_ref["model_ready"] is True
+    assert model_ref["display_name"] == "Facebook OPT 125M (Simulated)"
+
+
+def test_list_auth_policies_model_ref_unknown_when_modelrefs_unreadable() -> None:
+    policy_cr = _auth_policy("ap-a", "team-a", "model-x")
+
+    api = MagicMock()
+
+    def list_side_effect(group, version, plural):
+        if plural == "maasauthpolicies":
+            return {"items": [policy_cr]}
+        if plural == "maasmodelrefs":
+            raise ApiException(status=403)
+        raise AssertionError(f"unexpected plural {plural}")
+
+    api.list_cluster_custom_object.side_effect = list_side_effect
+    with patch.object(maas_client.k8s, "CustomObjectsApi", return_value=api), \
+         patch.object(maas_client, "_kube"):
+        result = maas_client.list_auth_policies()
+
+    model_ref = result.items[0]["model_refs"][0]
+    assert model_ref["model_exists"] is None
+    assert model_ref["model_ready"] is None
 
 
 def test_list_auth_policies_forbidden_is_unavailable() -> None:

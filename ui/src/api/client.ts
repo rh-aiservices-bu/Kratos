@@ -175,6 +175,9 @@ export interface MaasExternalProviderRef {
   credential_secret_name: string | null;
   // null means "couldn't read the secret" — never collapse into false.
   credential_secret_label_ok: boolean | null;
+  // This provider's own ExternalProvider CR YAML — null when it couldn't be
+  // resolved. Never merged into the model's own raw_yaml.
+  raw_yaml: string | null;
 }
 
 export interface MaasModelAuthPolicyRef {
@@ -206,15 +209,31 @@ export interface MaasModel {
   external_providers: MaasExternalProviderRef[];
   serving: MaasServingInfo | null;
   raw: unknown;
+  // Just this model's own CR (MaaSModelRef or ExternalModel) — the backing
+  // LLMInferenceService gets its own serving_raw_yaml below, never merged
+  // into one synthetic multi-object document.
   raw_yaml: string;
+  // The backing LLMInferenceService's own YAML (internal models only) —
+  // null for external models or when it couldn't be resolved.
+  serving_raw_yaml: string | null;
+}
+
+export interface MaasAuthPolicyModelRef {
+  name: string;
+  namespace: string;
+  display_name: string;
+  model_exists: boolean | null;
+  model_ready: boolean | null;
 }
 
 export interface MaasAuthPolicy {
   name: string;
   namespace: string;
   display_name: string;
+  description: string;
   owner: { groups: string[]; users: string[] };
-  model_refs: { name: string; namespace: string }[];
+  model_refs: MaasAuthPolicyModelRef[];
+  phase: string | null;
   ready: boolean;
   raw_yaml: string;
 }
