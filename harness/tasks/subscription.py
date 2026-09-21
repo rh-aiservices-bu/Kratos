@@ -35,6 +35,81 @@ _DEFAULT_TOKEN_WINDOW = "1s"
 _DEFAULT_OWNER_GROUPS = ["system:authenticated"]
 
 
+def _subscription_body(
+    sub_name: str,
+    namespace: str,
+    priority: int,
+    owner_groups: list[str],
+    owner_users: list[str],
+    model_name: str,
+    model_namespace: str,
+    token_limit: int,
+    token_window: str,
+) -> dict:
+    # Real MaaSSubscription schema (confirmed live, see
+    # docs/architecture/maas-domain-reference.md Catalog item A) — there is
+    # no top-level `rpsLimit` field; rate limits are per-model, under
+    # `modelRefs[].tokenRateLimits[]`.
+    return {
+        "apiVersion": f"{_GROUP}/{_VERSION}",
+        "kind": "MaaSSubscription",
+        "metadata": {"name": sub_name, "namespace": namespace},
+        "spec": {
+            "priority": priority,
+            "owner": {
+                "groups": [{"name": g} for g in owner_groups],
+                "users": owner_users,
+            },
+            "modelRefs": [
+                {
+                    "name": model_name,
+                    "namespace": model_namespace,
+                    "tokenRateLimits": [{"limit": token_limit, "window": token_window}],
+                }
+            ],
+        },
+    }
+
+
+def _get_existing_subscription(api: k8s_client.CustomObjectsApi, sub_name: str, namespace: str):
+    try:
+        return api.get_namespaced_custom_object(
+            group=_GROUP, version=_VERSION, namespace=namespace, plural=_PLURAL, name=sub_name
+        )
+    except k8s_client.ApiException as exc:
+        if exc.status == 404:
+            return None
+        raise
+
+
+def _create_or_patch_subscription(
+    api: k8s_client.CustomObjectsApi, sub_name: str, namespace: str, body: dict, existing
+) -> None:
+    if existing is None:
+        api.create_namespaced_custom_object(
+            group=_GROUP, version=_VERSION, namespace=namespace, plural=_PLURAL, body=body
+        )
+    else:
+        api.patch_namespaced_custom_object(
+            group=_GROUP, version=_VERSION, namespace=namespace, plural=_PLURAL,
+            name=sub_name, body=body,
+        )
+
+
+def _cleanup_subscription(
+    api: k8s_client.CustomObjectsApi, sub_name: str, namespace: str, original, created: bool
+) -> None:
+    if created:
+        api.delete_namespaced_custom_object(
+            group=_GROUP, version=_VERSION, namespace=namespace, plural=_PLURAL, name=sub_name
+        )
+    elif original is not None:
+        api.replace_namespaced_custom_object(
+            group=_GROUP, version=_VERSION, namespace=namespace, plural=_PLURAL,
+            name=sub_name, body=original,
+        )
+
+
 class ApplyRateLimitSubscriptionTask(Task):
     async def run(self, ctx: TaskContext) -> TaskResult:
         start = time.monotonic()
@@ -50,71 +125,20 @@ class ApplyRateLimitSubscriptionTask(Task):
         owner_users = self.params.get("owner_users") or []
 
         api = k8s_client.CustomObjectsApi()
+        existing = _get_existing_subscription(api, sub_name, namespace)
+        ctx.shared_state["original_subscription"] = existing
+        ctx.shared_state["_sub_created"] = existing is None
 
-        try:
-            existing = api.get_namespaced_custom_object(
-                group=_GROUP,
-                version=_VERSION,
-                namespace=namespace,
-                plural=_PLURAL,
-                name=sub_name,
-            )
-            ctx.shared_state["original_subscription"] = existing
-            ctx.shared_state["_sub_created"] = False
-        except k8s_client.ApiException as exc:
-            if exc.status == 404:
-                ctx.shared_state["original_subscription"] = None
-                ctx.shared_state["_sub_created"] = True
-            else:
-                raise
-
-        # Real MaaSSubscription schema (confirmed live, see
-        # docs/architecture/maas-domain-reference.md Catalog item A) —
-        # there is no top-level `rpsLimit` field; rate limits are per-model,
-        # under `modelRefs[].tokenRateLimits[]`.
-        body = {
-            "apiVersion": f"{_GROUP}/{_VERSION}",
-            "kind": "MaaSSubscription",
-            "metadata": {"name": sub_name, "namespace": namespace},
-            "spec": {
-                "priority": priority,
-                "owner": {
-                    "groups": [{"name": g} for g in owner_groups],
-                    "users": owner_users,
-                },
-                "modelRefs": [
-                    {
-                        "name": model_name,
-                        "namespace": model_namespace,
-                        "tokenRateLimits": [{"limit": token_limit, "window": token_window}],
-                    }
-                ],
-            },
-        }
-
-        if ctx.shared_state["_sub_created"]:
-            api.create_namespaced_custom_object(
-                group=_GROUP, version=_VERSION, namespace=namespace, plural=_PLURAL, body=body
-            )
-            print(
-                f"[apply_rate_limit_subscription] created {sub_name} "
-                f"token_limit={token_limit}/{token_window} for {model_namespace}/{model_name}",
-                flush=True,
-            )
-        else:
-            api.patch_namespaced_custom_object(
-                group=_GROUP,
-                version=_VERSION,
-                namespace=namespace,
-                plural=_PLURAL,
-                name=sub_name,
-                body=body,
-            )
-            print(
-                f"[apply_rate_limit_subscription] patched {sub_name} "
-                f"token_limit={token_limit}/{token_window} for {model_namespace}/{model_name}",
-                flush=True,
-            )
+        body = _subscription_body(
+            sub_name, namespace, priority, owner_groups, owner_users,
+            model_name, model_namespace, token_limit, token_window,
+        )
+        _create_or_patch_subscription(api, sub_name, namespace, body, existing)
+        print(
+            f"[apply_rate_limit_subscription] {'created' if existing is None else 'patched'} "
+            f"{sub_name} token_limit={token_limit}/{token_window} for {model_namespace}/{model_name}",
+            flush=True,
+        )
 
         ctx.shared_state["subscription_name"] = sub_name
         ctx.shared_state["subscription_namespace"] = namespace
@@ -137,25 +161,11 @@ class ApplyRateLimitSubscriptionTask(Task):
         created = ctx.shared_state.get("_sub_created", False)
 
         try:
-            if created:
-                api.delete_namespaced_custom_object(
-                    group=_GROUP,
-                    version=_VERSION,
-                    namespace=namespace,
-                    plural=_PLURAL,
-                    name=sub_name,
-                )
-                print(f"[apply_rate_limit_subscription] deleted {sub_name}", flush=True)
-            elif original is not None:
-                api.replace_namespaced_custom_object(
-                    group=_GROUP,
-                    version=_VERSION,
-                    namespace=namespace,
-                    plural=_PLURAL,
-                    name=sub_name,
-                    body=original,
-                )
-                print(f"[apply_rate_limit_subscription] restored {sub_name}", flush=True)
+            _cleanup_subscription(api, sub_name, namespace, original, created)
+            print(
+                f"[apply_rate_limit_subscription] {'deleted' if created else 'restored'} {sub_name}",
+                flush=True,
+            )
         except Exception:
             print(
                 f"[apply_rate_limit_subscription] cleanup FAILED\n{traceback.format_exc()}",
@@ -163,4 +173,91 @@ class ApplyRateLimitSubscriptionTask(Task):
             )
 
 
+class ApplyPriorityTestSubscriptionsTask(Task):
+    """Creates multiple MaaSSubscriptions in one task invocation, all sharing
+    the same owner (so they compete for the same caller's auto-selection),
+    each with its own priority/token_limit — used to empirically test that
+    MaaS's auto-selection actually picks the highest-priority eligible
+    subscription for a caller (ADR-021,
+    docs/architecture/empirical-verification-checklist.md).
+
+    A second YAML task entry for ApplyRateLimitSubscriptionTask (even under a
+    different registered name) would NOT work here: that task's shared_state
+    bookkeeping (subscription_name/_sub_created/original_subscription) is a
+    fixed key, not namespaced per task instance — two instances in one
+    scenario would silently clobber each other's cleanup state before
+    cleanup() ever runs. This task tracks a *list* instead, one entry per
+    subscription, so each gets cleaned up independently and correctly.
+    """
+
+    async def run(self, ctx: TaskContext) -> TaskResult:
+        start = time.monotonic()
+        namespace = str(self.params["namespace"])
+        model_name = str(self.params["model_name"])
+        model_namespace = str(self.params["model_namespace"])
+        owner_groups = self.params.get("owner_groups") or _DEFAULT_OWNER_GROUPS
+        owner_users = self.params.get("owner_users") or []
+        specs = self.params["subscriptions"]
+
+        api = k8s_client.CustomObjectsApi()
+        records = []
+        for spec in specs:
+            sub_name = str(spec["name"])
+            priority = int(spec["priority"])
+            token_limit = int(spec.get("token_limit", 10))
+            token_window = str(spec.get("token_window") or _DEFAULT_TOKEN_WINDOW)
+
+            existing = _get_existing_subscription(api, sub_name, namespace)
+            body = _subscription_body(
+                sub_name, namespace, priority, owner_groups, owner_users,
+                model_name, model_namespace, token_limit, token_window,
+            )
+            _create_or_patch_subscription(api, sub_name, namespace, body, existing)
+            print(
+                f"[apply_priority_test_subscriptions] "
+                f"{'created' if existing is None else 'patched'} {sub_name} "
+                f"priority={priority} token_limit={token_limit}/{token_window}",
+                flush=True,
+            )
+            records.append(
+                {
+                    "name": sub_name,
+                    "namespace": namespace,
+                    "original": existing,
+                    "created": existing is None,
+                }
+            )
+
+        ctx.shared_state["priority_test_subscriptions"] = records
+        await ctx.emit_assertion_state()
+
+        return TaskResult(
+            task_name=self.name,
+            status="PASS",
+            duration_ms=(time.monotonic() - start) * 1000,
+        )
+
+    async def cleanup(self, ctx: TaskContext) -> None:
+        records = ctx.shared_state.get("priority_test_subscriptions", [])
+        if not records:
+            return
+
+        api = k8s_client.CustomObjectsApi()
+        for rec in records:
+            try:
+                _cleanup_subscription(api, rec["name"], rec["namespace"], rec["original"], rec["created"])
+                print(
+                    f"[apply_priority_test_subscriptions] "
+                    f"{'deleted' if rec['created'] else 'restored'} {rec['name']}",
+                    flush=True,
+                )
+            except Exception:
+                print(
+                    f"[apply_priority_test_subscriptions] cleanup FAILED for {rec['name']}\n"
+                    f"{traceback.format_exc()}",
+                    flush=True,
+                )
+
+
 REGISTRY["apply_rate_limit_subscription"] = ApplyRateLimitSubscriptionTask
+REGISTRY["apply_priority_test_subscriptions"] = ApplyPriorityTestSubscriptionsTask

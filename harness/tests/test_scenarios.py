@@ -27,13 +27,14 @@ _KNOWN_CATEGORIES = {
     "Access Control",
     "Metrics Validation",
     "API Key Lifecycle",
+    "Platform Health",
     "Custom",
 }
 
 
-def test_exactly_seven_production_scenarios() -> None:
-    assert len(_SCENARIO_PATHS) == 7, (
-        f"Expected 7 scenario files, found {len(_SCENARIO_PATHS)}: "
+def test_exactly_nine_production_scenarios() -> None:
+    assert len(_SCENARIO_PATHS) == 9, (
+        f"Expected 9 scenario files, found {len(_SCENARIO_PATHS)}: "
         f"{[p.name for p in _SCENARIO_PATHS]}"
     )
 

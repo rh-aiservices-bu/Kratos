@@ -69,13 +69,22 @@ class ProvisionApiKeyTask(Task):
         # keys to a known subscription regardless of what else the caller is
         # eligible for.
         subscription = self.params.get("subscription")
+        # Verification-only, distinct from `subscription` above: does NOT get
+        # sent in the request body, so it never influences which subscription
+        # gets picked. Used to check the outcome of auto-selection (no
+        # `subscription` pinned at all) against an expected winner — e.g.
+        # confirming priority-based precedence (ADR-021,
+        # scenarios/rate_limit_priority_precedence.yaml) — as opposed to
+        # `subscription`, which forces a specific one.
+        expect_subscription = self.params.get("expect_subscription")
 
         # REST-only lifecycle checks (ADR-019, empirical-verification-checklist.md):
         # does the create response actually echo what we asked for, rather
         # than us trusting it silently? Pure request-vs-response comparison —
         # no CR read involved, so this holds up across MaaS schema changes.
-        # subscription_checked_count is its own counter (not just total_keys)
-        # because a scenario may not pass `subscription` at all.
+        # subscription_checked_count/expected_subscription_checked_count are
+        # their own counters (not just total_keys) because a scenario may not
+        # pass `subscription`/`expect_subscription` at all.
         checks = ctx.shared_state.setdefault(
             "key_provision_checks",
             {
@@ -83,6 +92,8 @@ class ProvisionApiKeyTask(Task):
                 "name_echo_match_count": 0,
                 "subscription_checked_count": 0,
                 "subscription_echo_match_count": 0,
+                "expected_subscription_checked_count": 0,
+                "expected_subscription_match_count": 0,
                 "expires_at_present_count": 0,
             },
         )
@@ -133,6 +144,10 @@ class ProvisionApiKeyTask(Task):
                     checks["subscription_checked_count"] += 1
                     if data.get("subscription") == subscription:
                         checks["subscription_echo_match_count"] += 1
+                if expect_subscription:
+                    checks["expected_subscription_checked_count"] += 1
+                    if data.get("subscription") == expect_subscription:
+                        checks["expected_subscription_match_count"] += 1
                 if data.get("expiresAt"):
                     checks["expires_at_present_count"] += 1
 

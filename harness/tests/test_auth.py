@@ -228,6 +228,55 @@ async def test_provision_api_key_subscription_not_checked_when_absent(httpx_mock
     assert checks["subscription_echo_match_count"] == 0
 
 
+async def test_provision_api_key_expect_subscription_matches(httpx_mock: HTTPXMock) -> None:
+    """expect_subscription (ADR-021) verifies auto-selection's outcome
+    without pinning — it must never appear in the request body."""
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys",
+        method="POST",
+        json={"id": "key-1", "key": "sk-1", "subscription": "kratos-priority-high"},
+    )
+
+    task = ProvisionApiKeyTask(
+        "provision_api_key",
+        {"key_name": "test-key", "expect_subscription": "kratos-priority-high"},
+    )
+    ctx = _make_ctx()
+    await task.run(ctx)
+
+    req = httpx_mock.get_requests()[0]
+    body = json.loads(req.content)
+    assert "subscription" not in body
+
+    checks = ctx.shared_state["key_provision_checks"]
+    assert checks["expected_subscription_checked_count"] == 1
+    assert checks["expected_subscription_match_count"] == 1
+    # expect_subscription is a check, not a pin — subscription_* counters
+    # (which only fire when `subscription` itself was passed) stay untouched.
+    assert checks["subscription_checked_count"] == 0
+
+
+async def test_provision_api_key_expect_subscription_mismatch(httpx_mock: HTTPXMock) -> None:
+    """Auto-selection picking the WRONG subscription must not be counted as
+    a match — this is the case that would actually catch a real priority bug."""
+    httpx_mock.add_response(
+        url="http://maas.test/maas-api/v1/api-keys",
+        method="POST",
+        json={"id": "key-1", "key": "sk-1", "subscription": "kratos-priority-low"},
+    )
+
+    task = ProvisionApiKeyTask(
+        "provision_api_key",
+        {"key_name": "test-key", "expect_subscription": "kratos-priority-high"},
+    )
+    ctx = _make_ctx()
+    await task.run(ctx)
+
+    checks = ctx.shared_state["key_provision_checks"]
+    assert checks["expected_subscription_checked_count"] == 1
+    assert checks["expected_subscription_match_count"] == 0
+
+
 async def test_revoke_api_keys_deletes_and_counts(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         url="http://maas.test/maas-api/v1/api-keys/id-1", method="DELETE", status_code=204

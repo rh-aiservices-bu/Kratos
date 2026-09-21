@@ -27,6 +27,7 @@ const CATEGORY_ORDER = [
   'Access Control',
   'Metrics Validation',
   'API Key Lifecycle',
+  'Platform Health',
 ] as const;
 const CUSTOM_CATEGORY = 'Custom';
 

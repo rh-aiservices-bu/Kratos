@@ -34,3 +34,5 @@ Each ADR follows the [Michael Nygard format](https://cognitect.com/blog/2011/11/
 | [ADR-018](ADR-018-access-control-enforcement-testing.md) | Access-Control Enforcement Testing via a Second CRD-Writing Task | Accepted |
 | [ADR-019](ADR-019-rest-only-api-key-lifecycle.md) | REST-Only API Key Lifecycle Validation | Accepted |
 | [ADR-020](ADR-020-scenario-categories.md) | Scenario Categories in the UI | Accepted |
+| [ADR-021](ADR-021-rate-limit-priority-precedence.md) | Rate-Limit Priority Precedence via Auto-Selection, Not Live Arbitration | Accepted |
+| [ADR-022](ADR-022-platform-health-checks.md) | Read-Only Platform Health Checks | Accepted |
