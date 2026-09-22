@@ -26,7 +26,7 @@ class ApplyAuthPolicyTask(Task):
     async def run(self, ctx: TaskContext) -> TaskResult:
         start = time.monotonic()
 
-        policy_name = str(self.params.get("policy_name", "kratos-test-auth-policy"))
+        policy_name = str(self.params.get("policy_name", "maaspal-test-auth-policy"))
         namespace = str(self.params["namespace"])
         model_name = str(self.params["model_name"])
         model_namespace = str(self.params["model_namespace"])

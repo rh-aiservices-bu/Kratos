@@ -81,7 +81,7 @@ export function RunHistory({ onViewRun }: Props) {
 
   return (
     <>
-      <p className="kratos-section-heading">Run History</p>
+      <p className="maaspal-section-heading">Run History</p>
       <Table aria-label="Run history">
         <Thead>
           <Tr>

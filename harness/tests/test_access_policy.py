@@ -11,7 +11,7 @@ _PARAMS = {
     "namespace": "models-as-a-service",
     "model_name": "facebook-opt-125m-simulated",
     "model_namespace": "llm",
-    "subject_groups": ["kratos-fail-closed-test"],
+    "subject_groups": ["maaspal-fail-closed-test"],
 }
 
 
@@ -57,7 +57,7 @@ async def test_creates_cr_when_not_existing() -> None:
 
     body = _body_from(api.create_namespaced_custom_object)
     assert body["metadata"]["namespace"] == "models-as-a-service"
-    assert body["spec"]["subjects"]["groups"] == [{"name": "kratos-fail-closed-test"}]
+    assert body["spec"]["subjects"]["groups"] == [{"name": "maaspal-fail-closed-test"}]
     assert body["spec"]["subjects"]["users"] == []
     model_ref = body["spec"]["modelRefs"][0]
     assert model_ref["name"] == "facebook-opt-125m-simulated"

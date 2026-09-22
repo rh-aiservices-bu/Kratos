@@ -158,8 +158,9 @@ class SendRequestsTask(Task):
     async def _resolve_url_model_and_token(self, ctx: TaskContext) -> tuple[str, str, str]:
         url = self.params.get("url") or ctx.shared_state.get("url")
         token = self.params.get("token") or ctx.shared_state.get("token") or ctx.sa_token
+        model_param = self.params.get("model", "")
         default_model = str(
-            self.params.get("model")
+            (model_param if model_param and model_param.strip("/") else None)
             or ctx.config.get("target_model")
             or ctx.config.get("DEFAULT_MODEL", "granite-3-8b-instruct")
         )

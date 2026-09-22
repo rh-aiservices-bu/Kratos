@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Kratos needs configuration at two distinct scopes:
+MaaS:PAL needs configuration at two distinct scopes:
 
 1. **Cluster-level**: the MaaS API base URL, default model, and default subscription. These are the same for every scenario run on a given cluster and should not need to be repeated in every scenario file.
 2. **Scenario-level**: run parameters specific to a scenario (request count, concurrency, rate limit, target URL, etc.). These vary per scenario and should be tunable without touching cluster-wide settings.

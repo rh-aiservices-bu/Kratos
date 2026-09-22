@@ -105,9 +105,9 @@ export function LogStream({ runId }: Props) {
   }, [lines, scrollToBottom]);
 
   return (
-    <div className="kratos-log-block">
-      <div className={`kratos-stream-status kratos-stream-status--${status}`}>
-        <span className="kratos-stream-status__dot" />
+    <div className="maaspal-log-block">
+      <div className={`maaspal-stream-status maaspal-stream-status--${status}`}>
+        <span className="maaspal-stream-status__dot" />
         <span>{STATUS_LABEL[status]}</span>
         {lines.length > 0 && (
           <span style={{ marginLeft: 'auto', fontWeight: 400, fontSize: '0.75rem', color: '#888' }}>
@@ -126,7 +126,7 @@ export function LogStream({ runId }: Props) {
           </CodeBlock>
         </div>
         {newLineCount > 0 && (
-          <button className="kratos-log-newlines-badge" onClick={scrollToBottom}>
+          <button className="maaspal-log-newlines-badge" onClick={scrollToBottom}>
             ↓ {newLineCount} new {newLineCount === 1 ? 'line' : 'lines'}
           </button>
         )}

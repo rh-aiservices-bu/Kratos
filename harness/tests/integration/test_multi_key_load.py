@@ -44,7 +44,7 @@ async def test_multi_key_load_all_keys_revoked() -> None:
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             f"{maas_url}/maas-api/v1/api-keys/search",
-            json={"name_prefix": "kratos-multi-key"},
+            json={"name_prefix": "maaspal-multi-key"},
             headers={"Authorization": f"Bearer {sa_token}"},
         )
         resp.raise_for_status()

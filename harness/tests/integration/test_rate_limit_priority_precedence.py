@@ -41,7 +41,7 @@ async def test_rate_limit_priority_precedence_no_leftover_subscriptions() -> Non
     runner = ScenarioRunner("scenarios/rate_limit_priority_precedence.yaml", run_id)
     await runner.run()
 
-    for sub_name in ("kratos-priority-low", "kratos-priority-high"):
+    for sub_name in ("maaspal-priority-low", "maaspal-priority-high"):
         try:
             leftover = api.get_namespaced_custom_object(
                 group="maas.opendatahub.io",

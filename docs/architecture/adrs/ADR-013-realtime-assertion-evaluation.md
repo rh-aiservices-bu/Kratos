@@ -14,7 +14,7 @@ Three approaches were considered:
 2. **Evaluation after each task completes**: assertions are re-evaluated each time a task's `run()` returns. Granularity is per-task, not per-operation within a task.
 3. **Continuous evaluation within tasks**: tasks update `shared_state` after every atomic operation (e.g. after every individual inference request in `send_requests`) and trigger assertion re-evaluation immediately. The operator sees metrics and assertion state update on every request, not just when the full task finishes.
 
-Kratos already streams task log output to the browser in real-time via SSE (ADR-007). Option 3 extends this to assertion state with the finest possible granularity.
+MaaS:PAL already streams task log output to the browser in real-time via SSE (ADR-007). Option 3 extends this to assertion state with the finest possible granularity.
 
 ## Decision
 

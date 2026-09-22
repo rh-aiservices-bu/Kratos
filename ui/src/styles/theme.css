@@ -1,9 +1,9 @@
 /* ============================================================
-   Kratos — custom theme overrides
+   MaaS:PAL — custom theme overrides
    ============================================================ */
 
 /* ---------- Masthead ---------- */
-.kratos-masthead {
+.maaspal-masthead {
   background: #111111;
   border-bottom: 3px solid #c62828;
   padding: 0 2rem;
@@ -16,7 +16,7 @@
   z-index: 200;
 }
 
-.kratos-masthead__logo {
+.maaspal-masthead__logo {
   font-size: 1.5rem;
   font-weight: 900;
   color: #ffffff;
@@ -27,30 +27,32 @@
   gap: 0.5rem;
 }
 
-.kratos-masthead__logo-accent {
-  color: #ef5350;
+.maaspal-masthead__logo-img {
+  height: 44px;
+  width: auto;
+  display: block;
 }
 
-.kratos-masthead__divider {
+.maaspal-masthead__divider {
   width: 1px;
   height: 28px;
   background: #333;
 }
 
-.kratos-masthead__subtitle {
+.maaspal-masthead__subtitle {
   color: #9e9e9e;
   font-size: 0.8rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
-.kratos-topnav {
+.maaspal-topnav {
   display: flex;
   gap: 0.25rem;
   margin-left: auto;
 }
 
-.kratos-topnav__link {
+.maaspal-topnav__link {
   background: none;
   border: none;
   color: #9e9e9e;
@@ -63,12 +65,12 @@
   transition: background 0.15s ease, color 0.15s ease;
 }
 
-.kratos-topnav__link:hover {
+.maaspal-topnav__link:hover {
   color: #ffffff;
   background: rgba(255, 255, 255, 0.06);
 }
 
-.kratos-topnav__link--active {
+.maaspal-topnav__link--active {
   color: #ffffff;
   background: #c62828;
 }
@@ -82,28 +84,28 @@
 }
 
 /* ---------- Scenario cards ---------- */
-.kratos-scenario-card > .pf-v5-c-card {
+.maaspal-scenario-card > .pf-v5-c-card {
   border-left: 4px solid #c62828;
   transition: box-shadow 0.15s ease, transform 0.1s ease;
 }
-.kratos-scenario-card > .pf-v5-c-card:hover {
+.maaspal-scenario-card > .pf-v5-c-card:hover {
   box-shadow: 0 4px 14px rgba(198, 40, 40, 0.18);
   transform: translateY(-1px);
 }
 
-.kratos-scenario-name {
+.maaspal-scenario-name {
   font-weight: 700;
   font-size: 1.05rem;
 }
 
 /* ---------- Log block (dark terminal look) ---------- */
-.kratos-log-block .pf-v5-c-code-block {
+.maaspal-log-block .pf-v5-c-code-block {
   background: #1a1a1a !important;
   border: 1px solid #2a2a2a;
   border-radius: 6px;
 }
 
-.kratos-log-block .pf-v5-c-code-block__content {
+.maaspal-log-block .pf-v5-c-code-block__content {
   color: #d4d4d4 !important;
   font-family: 'Cascadia Code', 'Fira Code', 'Menlo', 'Consolas', monospace;
   font-size: 0.82rem;
@@ -111,7 +113,7 @@
 }
 
 /* ---------- Stream status pill ---------- */
-.kratos-stream-status {
+.maaspal-stream-status {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -122,42 +124,42 @@
   letter-spacing: 0.06em;
 }
 
-.kratos-stream-status__dot {
+.maaspal-stream-status__dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
-.kratos-stream-status--connecting .kratos-stream-status__dot {
+.maaspal-stream-status--connecting .maaspal-stream-status__dot {
   background: #f0a500;
-  animation: kratos-pulse 1.2s infinite;
+  animation: maaspal-pulse 1.2s infinite;
 }
-.kratos-stream-status--connecting { color: #f0a500; }
+.maaspal-stream-status--connecting { color: #f0a500; }
 
-.kratos-stream-status--streaming .kratos-stream-status__dot {
+.maaspal-stream-status--streaming .maaspal-stream-status__dot {
   background: #0d6efd;
-  animation: kratos-pulse 0.8s infinite;
+  animation: maaspal-pulse 0.8s infinite;
 }
-.kratos-stream-status--streaming { color: #6ea8fe; }
+.maaspal-stream-status--streaming { color: #6ea8fe; }
 
-.kratos-stream-status--completed .kratos-stream-status__dot {
+.maaspal-stream-status--completed .maaspal-stream-status__dot {
   background: #3e8a3e;
 }
-.kratos-stream-status--completed { color: #75c475; }
+.maaspal-stream-status--completed { color: #75c475; }
 
-.kratos-stream-status--error .kratos-stream-status__dot {
+.maaspal-stream-status--error .maaspal-stream-status__dot {
   background: #c62828;
 }
-.kratos-stream-status--error { color: #ef9a9a; }
+.maaspal-stream-status--error { color: #ef9a9a; }
 
-@keyframes kratos-pulse {
+@keyframes maaspal-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
 
 /* ---------- Assertion cards ---------- */
-.kratos-assertion-card {
+.maaspal-assertion-card {
   border-radius: 6px;
   border: 1px solid #ddd;
   padding: 0.75rem 1rem;
@@ -169,7 +171,7 @@
   transition: border-color 0.25s ease;
 }
 
-.kratos-assertion-card__name {
+.maaspal-assertion-card__name {
   font-size: 0.78rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -177,20 +179,20 @@
   color: #555;
 }
 
-.kratos-assertion-card__value {
+.maaspal-assertion-card__value {
   font-size: 1.7rem;
   font-weight: 800;
   line-height: 1.1;
   color: var(--assertion-color, #444);
 }
 
-.kratos-assertion-card__expr {
+.maaspal-assertion-card__expr {
   font-size: 0.78rem;
   color: #888;
   font-family: 'Cascadia Code', 'Fira Code', monospace;
 }
 
-.kratos-assertion-card__status {
+.maaspal-assertion-card__status {
   font-size: 0.72rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -203,13 +205,13 @@
 }
 
 /* ---------- Run history status ---------- */
-.kratos-status-pass  { --pf-v5-c-label--BackgroundColor: #e6f4ea; color: #2e7d32 !important; }
-.kratos-status-fail  { --pf-v5-c-label--BackgroundColor: #fdecea; color: #c62828 !important; }
-.kratos-status-run   { --pf-v5-c-label--BackgroundColor: #e8f0fe; color: #1565c0 !important; }
-.kratos-status-pend  { --pf-v5-c-label--BackgroundColor: #f5f5f5; color: #616161 !important; }
+.maaspal-status-pass  { --pf-v5-c-label--BackgroundColor: #e6f4ea; color: #2e7d32 !important; }
+.maaspal-status-fail  { --pf-v5-c-label--BackgroundColor: #fdecea; color: #c62828 !important; }
+.maaspal-status-run   { --pf-v5-c-label--BackgroundColor: #e8f0fe; color: #1565c0 !important; }
+.maaspal-status-pend  { --pf-v5-c-label--BackgroundColor: #f5f5f5; color: #616161 !important; }
 
 /* ---------- Run detail back bar ---------- */
-.kratos-run-detail-bar {
+.maaspal-run-detail-bar {
   display: flex;
   align-items: center;
   gap: 1.5rem;
@@ -218,24 +220,24 @@
   margin-bottom: 1rem;
 }
 
-.kratos-run-detail-meta {
+.maaspal-run-detail-meta {
   display: flex;
   gap: 1.25rem;
   align-items: center;
   flex-wrap: wrap;
 }
 
-.kratos-run-detail-meta__item {
+.maaspal-run-detail-meta__item {
   font-size: 0.82rem;
   color: #555;
 }
 
-.kratos-run-detail-meta__item strong {
+.maaspal-run-detail-meta__item strong {
   color: #111;
 }
 
 /* ---------- Section headings ---------- */
-.kratos-section-heading {
+.maaspal-section-heading {
   font-weight: 700;
   font-size: 0.78rem;
   text-transform: uppercase;
@@ -245,7 +247,7 @@
 }
 
 /* ---------- Log new-lines badge ---------- */
-.kratos-log-newlines-badge {
+.maaspal-log-newlines-badge {
   position: absolute;
   bottom: 12px;
   left: 50%;
@@ -263,14 +265,14 @@
   white-space: nowrap;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
-.kratos-log-newlines-badge:hover {
+.maaspal-log-newlines-badge:hover {
   background: #0d1b38;
   border-color: #90caf9;
   color: #90caf9;
 }
 
 /* ---------- Task progress pipeline ---------- */
-.kratos-task-pipeline {
+.maaspal-task-pipeline {
   display: flex;
   align-items: flex-start;
   flex-wrap: wrap;
@@ -280,14 +282,14 @@
   border-bottom: 1px solid #e0e0e0;
 }
 
-.kratos-task-pipeline__arrow {
+.maaspal-task-pipeline__arrow {
   font-size: 1rem;
   color: #bbb;
   align-self: center;
   flex-shrink: 0;
 }
 
-.kratos-task-chip {
+.maaspal-task-chip {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
@@ -299,66 +301,66 @@
   transition: background 0.3s ease, border-color 0.3s ease;
 }
 
-.kratos-task-chip--done {
+.maaspal-task-chip--done {
   background: #e8f5e9;
 }
 
-.kratos-task-chip--fail {
+.maaspal-task-chip--fail {
   background: #fdecea;
 }
 
-.kratos-task-chip--running {
+.maaspal-task-chip--running {
   background: #e8f0fe;
 }
 
-.kratos-task-chip--cancelled {
+.maaspal-task-chip--cancelled {
   background: #fff3e0;
 }
 
-.kratos-task-chip__icon {
+.maaspal-task-chip__icon {
   font-size: 0.9rem;
   color: var(--task-color, #9e9e9e);
   line-height: 1;
 }
 
-@keyframes kratos-spin {
+@keyframes maaspal-spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
 
-.kratos-task-chip__spinner {
+.maaspal-task-chip__spinner {
   display: inline-block;
   width: 12px;
   height: 12px;
   border: 2px solid rgba(21, 101, 192, 0.25);
   border-top-color: #1565c0;
   border-radius: 50%;
-  animation: kratos-spin 0.75s linear infinite;
+  animation: maaspal-spin 0.75s linear infinite;
   flex-shrink: 0;
 }
 
-.kratos-task-chip__name {
+.maaspal-task-chip__name {
   font-size: 0.78rem;
   font-weight: 600;
   color: #333;
   white-space: nowrap;
 }
 
-.kratos-task-chip__duration {
+.maaspal-task-chip__duration {
   font-size: 0.7rem;
   color: #888;
   font-family: 'Cascadia Code', 'Fira Code', monospace;
   white-space: nowrap;
 }
 
-.kratos-task-chip__progress-wrap {
+.maaspal-task-chip__progress-wrap {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
   margin-top: 0.2rem;
 }
 
-.kratos-task-chip__progress-bar {
+.maaspal-task-chip__progress-bar {
   height: 4px;
   background: #e0e0e0;
   border-radius: 2px;
@@ -366,27 +368,27 @@
   min-width: 80px;
 }
 
-.kratos-task-chip__progress-fill {
+.maaspal-task-chip__progress-fill {
   height: 100%;
   background: var(--task-color, #1565c0);
   border-radius: 2px;
   transition: width 0.3s ease;
 }
 
-.kratos-task-chip__progress-label {
+.maaspal-task-chip__progress-label {
   font-size: 0.7rem;
   color: #888;
   font-family: 'Cascadia Code', 'Fira Code', monospace;
 }
 
 /* ---------- Assertion group (per-task section) ---------- */
-.kratos-assertion-group {
+.maaspal-assertion-group {
   display: flex;
   flex-direction: column;
   transition: opacity 0.2s ease;
 }
 
-.kratos-assertion-group__header {
+.maaspal-assertion-group__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -395,7 +397,7 @@
   margin-bottom: 0.1rem;
 }
 
-.kratos-assertion-group__title {
+.maaspal-assertion-group__title {
   font-size: 0.76rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -403,7 +405,7 @@
   color: #444;
 }
 
-.kratos-assertion-group__status {
+.maaspal-assertion-group__status {
   font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -411,7 +413,7 @@
 }
 
 /* ---------- Task chip assertion badge ---------- */
-.kratos-task-chip__assertion-badge {
+.maaspal-task-chip__assertion-badge {
   display: inline-block;
   width: 7px;
   height: 7px;
@@ -420,20 +422,20 @@
 }
 
 /* ---------- Config form ---------- */
-.kratos-config-form {
+.maaspal-config-form {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 1rem;
   margin: 1rem 0;
 }
 
-.kratos-config-form__field {
+.maaspal-config-form__field {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
 }
 
-.kratos-config-form__label {
+.maaspal-config-form__label {
   font-size: 0.8rem;
   font-weight: 600;
   color: #444;

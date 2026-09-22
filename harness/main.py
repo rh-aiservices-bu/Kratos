@@ -46,7 +46,7 @@ async def _run(scenario_path: str, run_id: str):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Kratos scenario runner")
+    parser = argparse.ArgumentParser(description="MaaS:PAL scenario runner")
     parser.add_argument("--scenario", required=True, help="Path to scenario YAML")
     parser.add_argument("--run-id", required=True, dest="run_id", help="Unique run identifier")
     args = parser.parse_args()

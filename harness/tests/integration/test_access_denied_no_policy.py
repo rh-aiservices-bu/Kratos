@@ -37,9 +37,9 @@ async def test_access_denied_no_policy_subscription_restored() -> None:
     api = k8s_client.CustomObjectsApi()
     # Must match scenarios/access_denied_no_policy.yaml's config defaults
     # (subscription_namespace/subscription_name) — see ADR-009's Update
-    # section for why this must be the MaaS tenant namespace, never kratos.
+    # section for why this must be the MaaS tenant namespace, never maaspal.
     namespace = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
-    sub_name = "kratos-fail-closed-test"
+    sub_name = "maaspal-fail-closed-test"
 
     try:
         before = api.get_namespaced_custom_object(

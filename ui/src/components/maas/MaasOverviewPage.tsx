@@ -25,7 +25,7 @@ export function MaasOverviewPage() {
   return (
     <Page>
       <PageSection>
-        <p className="kratos-section-heading">MaaS Setup</p>
+        <p className="maaspal-section-heading">MaaS Setup</p>
         <Tabs
           activeKey={activeTab}
           onSelect={(_evt, key) => setActiveTab(key as TabKey)}

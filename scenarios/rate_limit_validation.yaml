@@ -2,7 +2,7 @@ name: rate_limit_validation
 description: "Rate-limit validation — applies a MaaSSubscription CR (per-model token rate limit) and asserts observed token throughput stays at or below it"
 category: "Rate Limiting"
 config:
-  subscription_name: "kratos-rate-limit-test"
+  subscription_name: "maaspal-rate-limit-test"
   subscription_namespace: "models-as-a-service"  # install-specific tenant namespace; override if yours differs
   target_model_name: ""       # required — the MaaSModelRef's own name, e.g. "facebook-opt-125m-simulated" (not the plain model id)
   target_model_namespace: ""  # required — the namespace that MaaSModelRef lives in, e.g. "llm"
@@ -30,7 +30,7 @@ tasks:
       token_limit: "${config.token_limit}"
   - name: provision_api_key
     params:
-      key_name: "kratos-rate-key"
+      key_name: "maaspal-rate-key"
       count: "${config.key_count}"
       subscription: "${config.subscription_name}"
     # REST-only check (ADR-019): the create response actually echoes the

@@ -1,4 +1,4 @@
-IMAGE ?= quay.io/rlundber/kratos:0.1
+IMAGE ?= quay.io/rh-aiservices-bu/maaspal:latest
 SCENARIOS_DIR ?= scenarios
 
 .PHONY: lint test build push deploy dev clean
@@ -19,6 +19,7 @@ push: build
 	podman push $(IMAGE)
 
 deploy:
+	oc get namespace maaspal >/dev/null 2>&1 || oc new-project maaspal
 	oc apply -k .
 
 dev:

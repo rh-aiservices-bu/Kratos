@@ -18,7 +18,7 @@ metrics_queries:
 tasks:
   - name: provision_api_key
     params:
-      key_name: "kratos-metrics-key"
+      key_name: "maaspal-metrics-key"
   - name: send_requests
     params:
       count: "${config.request_count}"

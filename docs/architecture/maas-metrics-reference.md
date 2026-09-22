@@ -1,6 +1,6 @@
 # MaaS/RHOAI Metrics Reference
 
-Findings from live-cluster research (`oc` read-only calls + Thanos Querier queries against `cluster-rkmhx.rkmhx.sandbox1230.opentlc.com`, the cluster `deploy/configmap-global.yaml` targets) plus literal source from the upstream [`opendatahub-io/models-as-a-service`](https://github.com/opendatahub-io/models-as-a-service) repo. Catalogs every metric-emitting component found, not just the two Kratos currently uses (see ADR-014 for the decision and what's actually wired up).
+Findings from live-cluster research (`oc` read-only calls + Thanos Querier queries against `cluster-rkmhx.rkmhx.sandbox1230.opentlc.com`, the cluster `deploy/configmap-global.yaml` targets) plus literal source from the upstream [`opendatahub-io/models-as-a-service`](https://github.com/opendatahub-io/models-as-a-service) repo. Catalogs every metric-emitting component found, not just the two MaaS:PAL currently uses (see ADR-014 for the decision and what's actually wired up).
 
 ## Access method
 
@@ -11,20 +11,20 @@ GET https://thanos-querier-openshift-monitoring.apps.<CLUSTER_DOMAIN>/api/v1/que
 Authorization: Bearer <token>
 ```
 
-Requires the querying identity to be bound to the `cluster-monitoring-view` ClusterRole (`deploy/rbac-monitoring.yaml` binds the Kratos SA to it). Verified this route/RBAC pattern exists and works on the live cluster using a real bearer token.
+Requires the querying identity to be bound to the `cluster-monitoring-view` ClusterRole (`deploy/rbac-monitoring.yaml` binds the MaaS:PAL SA to it). Verified this route/RBAC pattern exists and works on the live cluster using a real bearer token.
 
-**Scrape freshness**: confirmed `scrapeInterval: 30s` cluster-wide (`oc get prometheus -n openshift-user-workload-monitoring -o jsonpath='{.items[0].spec.scrapeInterval}'`), no per-target override on the Limitador PodMonitor. This bounds how fresh any query result can be — a request landing right after a scrape must wait up to ~30s for the next one, which is why Kratos's final metrics check retries with a settle window (`max_wait_s`, see ADR-014) rather than fetching once.
+**Scrape freshness**: confirmed `scrapeInterval: 30s` cluster-wide (`oc get prometheus -n openshift-user-workload-monitoring -o jsonpath='{.items[0].spec.scrapeInterval}'`), no per-target override on the Limitador PodMonitor. This bounds how fresh any query result can be — a request landing right after a scrape must wait up to ~30s for the next one, which is why MaaS:PAL's final metrics check retries with a settle window (`max_wait_s`, see ADR-014) rather than fetching once.
 
-One-off debugging technique also used during research (not what Kratos uses at runtime): the Kubernetes API server can proxy directly to a pod's or service's own metrics port without Thanos or a port-forward, which is useful for a component whose metrics haven't been scraped/labeled yet:
+One-off debugging technique also used during research (not what MaaS:PAL uses at runtime): the Kubernetes API server can proxy directly to a pod's or service's own metrics port without Thanos or a port-forward, which is useful for a component whose metrics haven't been scraped/labeled yet:
 ```
 oc get --raw /api/v1/namespaces/<ns>/pods/<pod-name>:<port>/proxy/metrics
 oc get --raw /api/v1/namespaces/<ns>/services/http:<service-name>:<port>/proxy/metrics
 ```
 (Note: ad-hoc `oc port-forward` did not work reliably in the research sandbox environment used for this session — the API server proxy path above was the reliable alternative.)
 
-## Limitador (gateway data-plane traffic — what Kratos uses)
+## Limitador (gateway data-plane traffic — what MaaS:PAL uses)
 
-Source of the request/token counts that actually matter for validating "what did MaaS's gateway do with the requests Kratos sent." Emitted by Limitador (Kuadrant's rate-limiter, in the request path via Istio/Envoy), scraped via the `kuadrant-limitador-monitor` PodMonitor in `kuadrant-system`.
+Source of the request/token counts that actually matter for validating "what did MaaS's gateway do with the requests MaaS:PAL sent." Emitted by Limitador (Kuadrant's rate-limiter, in the request path via Istio/Envoy), scraped via the `kuadrant-limitador-monitor` PodMonitor in `kuadrant-system`.
 
 Per the canonical upstream docs page ([`observability/metrics-and-dashboards`](https://opendatahub-io.github.io/models-as-a-service/latest/observability/metrics-and-dashboards/), raw source read literally, not AI-summarized):
 
@@ -47,7 +47,7 @@ limited_calls{limitador_namespace="llm/facebook-opt-125m-simulated-kserve-route"
 
 (A different, unrelated MaaS sandbox cluster checked briefly during this research, `caiprod.rhoai.rh-aiservices-bu.com`, had `authorized_calls` but no `authorized_hits` series at all — metric/label availability isn't guaranteed consistent across Limitador deployments/versions, so re-verify per cluster with a live `/api/v1/series` query before wiring `MAAS_METRICS_QUERIES`, don't assume either this doc or the upstream docs.)
 
-Official common-query examples from the docs page (token/request totals, per-model rate, top users, rate-limit ratio, latency percentiles) all use these same bare metric names — e.g. `sum by (user) (authorized_hits)`, `sum by (subscription) (rate(authorized_calls[5m]))`, `(sum(limited_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(0)`. Kratos's own queries (see ADR-014) add the `limitador_namespace` filter since `user`/`subscription` aren't available here:
+Official common-query examples from the docs page (token/request totals, per-model rate, top users, rate-limit ratio, latency percentiles) all use these same bare metric names — e.g. `sum by (user) (authorized_hits)`, `sum by (subscription) (rate(authorized_calls[5m]))`, `(sum(limited_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(0)`. MaaS:PAL's own queries (see ADR-014) add the `limitador_namespace` filter since `user`/`subscription` aren't available here:
 ```promql
 sum(authorized_calls{limitador_namespace="llm/facebook-opt-125m-simulated-kserve-route"})
 sum(authorized_hits{limitador_namespace="llm/facebook-opt-125m-simulated-kserve-route"})
@@ -57,7 +57,7 @@ sum(authorized_hits{limitador_namespace="llm/facebook-opt-125m-simulated-kserve-
 
 **A second, inconsistent dashboard format in the same repo**: `deployment/components/observability/observability/dashboards/usage-dashboard.yaml` (a Perses dashboard, distinct from the canonical Grafana one linked from the docs page) uses `authorized_calls_total`/`authorized_hits_total`/`limited_calls_total` (`_total` suffix) with `user`/`subscription`/`model`/`limitador_namespace` labels — neither the suffix nor the richer labels match what's live on this cluster or what the canonical docs describe. Worth knowing this file exists and disagrees, but don't treat it as authoritative over the docs page + a live series check.
 
-## maas-api (control-plane traffic — NOT what Kratos uses for request/token validation)
+## maas-api (control-plane traffic — NOT what MaaS:PAL uses for request/token validation)
 
 Source: `maas-api/internal/metrics/prometheus.go` in the upstream repo (read literally). Tracks HTTP calls to maas-api's *own* endpoints (`/maas-api/v1/api-keys` etc. — key lifecycle), not inference traffic. Scraped via its own `metrics_service.yaml`.
 
@@ -74,9 +74,9 @@ Source: `maas-api/internal/metrics/prometheus.go` in the upstream repo (read lit
 
 maas-api has **no metrics endpoint documented in the official observability docs table** ("Pod status only") despite this package existing in source — the docs table appears to predate or not cover this internal instrumentation. Confirmed via the Kubernetes API-server pod-proxy technique above that the maas-controller pod (a different component, the CRD reconciler) only exposes standard `controller-runtime` operational metrics (`controller_runtime_reconcile_*`, `certwatcher_*`) — no business metrics.
 
-## vLLM (per-model inference metrics — not currently usable for Kratos's default target model)
+## vLLM (per-model inference metrics — not currently usable for MaaS:PAL's default target model)
 
-Exposed on `/metrics` port 8000. Supported backends per the docs: vLLM v0.7.x, llm-d v0.1.x, llm-d-inference-sim v0.8.2. Confirmed present (with real values) for models on this cluster that have a PodMonitor/ServiceMonitor — but **confirmed absent** for `facebook-opt-125m-simulated`, the only model MaaS currently exposes on this cluster, since it's a lightweight simulator, not one of those supported backends. Included here for completeness / future use if Kratos is ever pointed at a real vLLM-backed model.
+Exposed on `/metrics` port 8000. Supported backends per the docs: vLLM v0.7.x, llm-d v0.1.x, llm-d-inference-sim v0.8.2. Confirmed present (with real values) for models on this cluster that have a PodMonitor/ServiceMonitor — but **confirmed absent** for `facebook-opt-125m-simulated`, the only model MaaS currently exposes on this cluster, since it's a lightweight simulator, not one of those supported backends. Included here for completeness / future use if MaaS:PAL is ever pointed at a real vLLM-backed model.
 
 | Metric | Type | Description |
 |---|---|---|
@@ -123,12 +123,12 @@ Exposed on `/server-metrics` port 8080 — note this is a **different** endpoint
 
 For MaaS-specific evaluators, filter `evaluator_type="METADATA_GENERIC_HTTP"` and `evaluator_name=~"apiKeyValidation|subscription-info"` — like everything else in this doc's Limitador section, these series only appear after traffic actually hits each evaluator.
 
-If ever needed for Kratos, verify the above the same way Limitador was verified — a live `/api/v1/series` query against Thanos Querier, not just the docs — since the Limitador case in this doc showed real label availability can differ from what's documented even when the metric names match.
+If ever needed for MaaS:PAL, verify the above the same way Limitador was verified — a live `/api/v1/series` query against Thanos Querier, not just the docs — since the Limitador case in this doc showed real label availability can differ from what's documented even when the metric names match.
 
 ## Grafana dashboards (not deployed/verified this session)
 
-Upstream ships two pre-built dashboards (`./scripts/observability/install-grafana-dashboards.sh`, needs a cluster-wide Grafana instance labeled `app=grafana`): a **Platform Admin** dashboard (component health, token/request/success-rate/latency summary, per-model and per-subscription traffic breakdown, top users, resource allocation) and an **AI Engineer** dashboard (a caller's own usage summary/trends). Manual-import JSON for a token-metrics-focused dashboard: [`maas-token-metrics-dashboard.json`](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json). Neither was deployed on the researched cluster — Kratos doesn't depend on them, but they're the human-facing equivalent of what `MAAS_METRICS_QUERIES` queries programmatically.
+Upstream ships two pre-built dashboards (`./scripts/observability/install-grafana-dashboards.sh`, needs a cluster-wide Grafana instance labeled `app=grafana`): a **Platform Admin** dashboard (component health, token/request/success-rate/latency summary, per-model and per-subscription traffic breakdown, top users, resource allocation) and an **AI Engineer** dashboard (a caller's own usage summary/trends). Manual-import JSON for a token-metrics-focused dashboard: [`maas-token-metrics-dashboard.json`](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json). Neither was deployed on the researched cluster — MaaS:PAL doesn't depend on them, but they're the human-facing equivalent of what `MAAS_METRICS_QUERIES` queries programmatically.
 
 ## See also
-- ADR-014 (`docs/architecture/adrs/ADR-014-maas-metrics-cross-validation.md`) for the actual decision, what Kratos wires up, and why.
+- ADR-014 (`docs/architecture/adrs/ADR-014-maas-metrics-cross-validation.md`) for the actual decision, what MaaS:PAL wires up, and why.
 - Upstream docs: [`opendatahub-io.github.io/models-as-a-service/latest/observability/metrics-and-dashboards/`](https://opendatahub-io.github.io/models-as-a-service/latest/observability/metrics-and-dashboards/) — the canonical source for this doc's Limitador/vLLM/Istio/Authorino/Grafana content; raw source read directly (`docs/content/observability/metrics-and-dashboards.md` in the repo) rather than relying on a summarized fetch of the rendered page, after an earlier summarized pass introduced a metric-naming inaccuracy this doc has since corrected.

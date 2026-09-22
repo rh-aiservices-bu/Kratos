@@ -38,10 +38,10 @@ async def test_rate_limit_subscription_restored() -> None:
     # Must match scenarios/rate_limit_validation.yaml's config defaults
     # (subscription_namespace/subscription_name), not the harness's own
     # NAMESPACE — a MaaSSubscription only gets reconciled when it lives in
-    # the MaaS tenant namespace, never the kratos namespace. See ADR-009's
+    # the MaaS tenant namespace, never the maaspal namespace. See ADR-009's
     # Update section.
     namespace = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
-    sub_name = "kratos-rate-limit-test"
+    sub_name = "maaspal-rate-limit-test"
 
     # Capture state before
     try:

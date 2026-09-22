@@ -62,7 +62,7 @@ export function RateLimitingTab() {
 
   return (
     <>
-      <p className="kratos-section-heading">Token Rate Limit Policies</p>
+      <p className="maaspal-section-heading">Token Rate Limit Policies</p>
       {policiesUnavailable ? (
         <MaasUnavailableNotice reason={policiesUnavailable} />
       ) : (
@@ -134,7 +134,7 @@ export function RateLimitingTab() {
         </Table>
       )}
 
-      <p className="kratos-section-heading" style={{ marginTop: '1.5rem' }}>Limitador</p>
+      <p className="maaspal-section-heading" style={{ marginTop: '1.5rem' }}>Limitador</p>
       {limitadorUnavailable ? (
         <MaasUnavailableNotice reason={limitadorUnavailable} />
       ) : (

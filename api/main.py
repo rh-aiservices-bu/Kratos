@@ -70,7 +70,7 @@ async def lifespan(_app: FastAPI):
     task.cancel()
 
 
-app = FastAPI(title="Kratos", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="MaaS:PAL", version="0.1.0", lifespan=lifespan)
 app.include_router(scenarios_router)
 app.include_router(runs_router)
 app.include_router(logs_router)

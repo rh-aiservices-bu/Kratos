@@ -1,3 +1,4 @@
+import palLogo from './assets/pal-logo.png';
 import { useEffect, useState } from 'react';
 import { Grid, GridItem, Page, PageSection } from '@patternfly/react-core';
 import { MaasOverviewPage } from './components/maas/MaasOverviewPage';
@@ -21,7 +22,7 @@ function navigateTo(view: AppView): void {
   window.history.pushState({}, '', window.location.pathname + hash);
 }
 
-function KratosMasthead({
+function MaaspalMasthead({
   activeNav,
   onNavigate,
 }: {
@@ -29,25 +30,22 @@ function KratosMasthead({
   onNavigate: (page: 'home' | 'maas') => void;
 }) {
   return (
-    <header className="kratos-masthead">
-      <div className="kratos-masthead__logo">
-        <span>&#9876;</span>
-        <span>
-          KR<span className="kratos-masthead__logo-accent">A</span>TOS
-        </span>
+    <header className="maaspal-masthead">
+      <div className="maaspal-masthead__logo">
+        <img src={palLogo} alt="MaaS:PAL" className="maaspal-masthead__logo-img" />
       </div>
-      <div className="kratos-masthead__divider" />
-      <span className="kratos-masthead__subtitle">RHOAI Test Harness</span>
+      <div className="maaspal-masthead__divider" />
+      <span className="maaspal-masthead__subtitle">RHOAI Test Harness</span>
       {activeNav !== null && (
-        <nav className="kratos-topnav">
+        <nav className="maaspal-topnav">
           <button
-            className={`kratos-topnav__link${activeNav === 'home' ? ' kratos-topnav__link--active' : ''}`}
+            className={`maaspal-topnav__link${activeNav === 'home' ? ' maaspal-topnav__link--active' : ''}`}
             onClick={() => onNavigate('home')}
           >
             Runs
           </button>
           <button
-            className={`kratos-topnav__link${activeNav === 'maas' ? ' kratos-topnav__link--active' : ''}`}
+            className={`maaspal-topnav__link${activeNav === 'maas' ? ' maaspal-topnav__link--active' : ''}`}
             onClick={() => onNavigate('maas')}
           >
             MaaS Setup
@@ -98,7 +96,7 @@ function App() {
   if (view.page === 'run') {
     return (
       <>
-        <KratosMasthead activeNav={null} onNavigate={handleNavigate} />
+        <MaaspalMasthead activeNav={null} onNavigate={handleNavigate} />
         <RunDetail
           runId={view.runId}
           onBack={handleBack}
@@ -110,7 +108,7 @@ function App() {
   if (view.page === 'maas') {
     return (
       <>
-        <KratosMasthead activeNav="maas" onNavigate={handleNavigate} />
+        <MaaspalMasthead activeNav="maas" onNavigate={handleNavigate} />
         <MaasOverviewPage />
       </>
     );
@@ -118,7 +116,7 @@ function App() {
 
   return (
     <>
-      <KratosMasthead activeNav="home" onNavigate={handleNavigate} />
+      <MaaspalMasthead activeNav="home" onNavigate={handleNavigate} />
       <Page>
         <PageSection>
           <Grid hasGutter>

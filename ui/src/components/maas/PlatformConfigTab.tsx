@@ -47,7 +47,7 @@ export function PlatformConfigTab() {
 
   return (
     <>
-      <p className="kratos-section-heading">Tenant Configuration</p>
+      <p className="maaspal-section-heading">Tenant Configuration</p>
       {!tenants.available ? (
         <MaasUnavailableNotice reason={tenants.reason} />
       ) : (
@@ -105,7 +105,7 @@ export function PlatformConfigTab() {
         </Table>
       )}
 
-      <p className="kratos-section-heading" style={{ marginTop: '1.5rem' }}>DataScienceCluster</p>
+      <p className="maaspal-section-heading" style={{ marginTop: '1.5rem' }}>DataScienceCluster</p>
       {!dsc.available ? (
         <MaasUnavailableNotice reason={dsc.reason} />
       ) : !dsc.item ? (
@@ -137,7 +137,7 @@ export function PlatformConfigTab() {
         </Card>
       )}
 
-      <p className="kratos-section-heading" style={{ marginTop: '1.5rem' }}>OdhDashboardConfig</p>
+      <p className="maaspal-section-heading" style={{ marginTop: '1.5rem' }}>OdhDashboardConfig</p>
       {!odh.available ? (
         <MaasUnavailableNotice reason={odh.reason} />
       ) : !odh.item ? (

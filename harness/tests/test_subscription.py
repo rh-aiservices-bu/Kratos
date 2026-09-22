@@ -199,8 +199,8 @@ _PRIORITY_PARAMS = {
     "model_namespace": "llm",
     "ready_max_wait_s": "0",
     "subscriptions": [
-        {"name": "kratos-priority-low", "priority": 50, "token_limit": 10},
-        {"name": "kratos-priority-high", "priority": 200, "token_limit": 1000000},
+        {"name": "maaspal-priority-low", "priority": 50, "token_limit": 10},
+        {"name": "maaspal-priority-high", "priority": 200, "token_limit": 1000000},
     ],
 }
 
@@ -220,7 +220,7 @@ async def test_priority_subscriptions_creates_both_when_absent() -> None:
     assert result.status == "PASS"
     assert api.create_namespaced_custom_object.call_count == 2
     records = ctx.shared_state["priority_test_subscriptions"]
-    assert [r["name"] for r in records] == ["kratos-priority-low", "kratos-priority-high"]
+    assert [r["name"] for r in records] == ["maaspal-priority-low", "maaspal-priority-high"]
     assert all(r["created"] for r in records)
 
     bodies = [c.kwargs["body"] for c in api.create_namespaced_custom_object.call_args_list]
@@ -262,9 +262,9 @@ async def test_priority_subscriptions_independent_per_record_state() -> None:
         await task.cleanup(ctx)
 
         api.replace_namespaced_custom_object.assert_called_once()
-        assert api.replace_namespaced_custom_object.call_args.kwargs["name"] == "kratos-priority-low"
+        assert api.replace_namespaced_custom_object.call_args.kwargs["name"] == "maaspal-priority-low"
         api.delete_namespaced_custom_object.assert_called_once()
-        assert api.delete_namespaced_custom_object.call_args.kwargs["name"] == "kratos-priority-high"
+        assert api.delete_namespaced_custom_object.call_args.kwargs["name"] == "maaspal-priority-high"
 
 
 async def test_priority_subscriptions_cleanup_noop_when_no_state() -> None:

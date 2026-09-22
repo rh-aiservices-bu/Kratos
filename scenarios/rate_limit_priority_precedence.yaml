@@ -13,8 +13,8 @@ config:
   subscription_namespace: "models-as-a-service"  # install-specific tenant namespace; override if yours differs
   target_model_name: ""       # required — the MaaSModelRef's own name, e.g. "facebook-opt-125m-simulated" (not the plain model id)
   target_model_namespace: ""  # required — the namespace that MaaSModelRef lives in, e.g. "llm"
-  low_priority_subscription_name: "kratos-priority-low"
-  high_priority_subscription_name: "kratos-priority-high"
+  low_priority_subscription_name: "maaspal-priority-low"
+  high_priority_subscription_name: "maaspal-priority-high"
   # Chosen to sit clearly outside the 100 default used elsewhere
   # (harness/tasks/subscription.py's _DEFAULT_PRIORITY), so this scenario's
   # outcome doesn't depend on whether rate_limit_validation/
@@ -41,7 +41,7 @@ tasks:
           token_limit: "${config.high_priority_token_limit}"
   - name: provision_api_key
     params:
-      key_name: "kratos-priority-key"
+      key_name: "maaspal-priority-key"
       # Deliberately NOT pinning `subscription` — auto-selection is exactly
       # what this scenario is testing. expect_subscription only checks the
       # outcome (ADR-021), it never influences the request.

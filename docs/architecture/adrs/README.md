@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This directory contains ADRs for the Kratos RHOAI MaaS Testing Harness.
+This directory contains ADRs for the MaaS:PAL RHOAI MaaS Testing Harness.
 
 ## Format
 

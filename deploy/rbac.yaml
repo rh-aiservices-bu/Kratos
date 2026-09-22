@@ -1,8 +1,8 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: kratos
-  namespace: kratos
+  name: maaspal
+  namespace: maaspal
 rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log"]
@@ -14,13 +14,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: kratos
-  namespace: kratos
+  name: maaspal
+  namespace: maaspal
 subjects:
   - kind: ServiceAccount
-    name: kratos
-    namespace: kratos
+    name: maaspal
+    namespace: maaspal
 roleRef:
   kind: Role
-  name: kratos
+  name: maaspal
   apiGroup: rbac.authorization.k8s.io

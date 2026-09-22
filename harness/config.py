@@ -32,7 +32,7 @@ def load_scenario(path: str) -> dict:
     """Load and resolve a scenario YAML.
 
     Config precedence (highest → lowest):
-      1. KRATOS_CONFIG_OVERRIDES env var (user-provided via UI)
+      1. MAASPAL_CONFIG_OVERRIDES env var (user-provided via UI)
       2. Scenario YAML ``config:`` section
       3. Environment variables (injected from global ConfigMap)
     """
@@ -43,7 +43,7 @@ def load_scenario(path: str) -> dict:
 
     user_overrides: dict[str, Any] = {}
     try:
-        user_overrides = json.loads(os.environ.get("KRATOS_CONFIG_OVERRIDES", "{}")) or {}
+        user_overrides = json.loads(os.environ.get("MAASPAL_CONFIG_OVERRIDES", "{}")) or {}
     except Exception:
         pass
 

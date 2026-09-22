@@ -55,7 +55,7 @@ export function TaskProgress({ tasks }: Props) {
   if (tasks.length === 0) return null;
 
   return (
-    <div className="kratos-task-pipeline">
+    <div className="maaspal-task-pipeline">
       {tasks.map((task, i) => {
         const color = STATUS_COLOR[task.status];
         const isRunning = task.status === 'RUNNING';
@@ -77,38 +77,38 @@ export function TaskProgress({ tasks }: Props) {
 
         return (
           <div key={task.name} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            {i > 0 && <span className="kratos-task-pipeline__arrow">→</span>}
+            {i > 0 && <span className="maaspal-task-pipeline__arrow">→</span>}
             <div
-              className={`kratos-task-chip kratos-task-chip--${task.status.toLowerCase()}`}
+              className={`maaspal-task-chip maaspal-task-chip--${task.status.toLowerCase()}`}
               style={{ '--task-color': color } as React.CSSProperties}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                 {isRunning ? (
-                  <span className="kratos-task-chip__spinner" />
+                  <span className="maaspal-task-chip__spinner" />
                 ) : (
-                  <span className="kratos-task-chip__icon">{STATUS_ICON[task.status]}</span>
+                  <span className="maaspal-task-chip__icon">{STATUS_ICON[task.status]}</span>
                 )}
-                <span className="kratos-task-chip__name">{formatTaskName(task.name)}</span>
+                <span className="maaspal-task-chip__name">{formatTaskName(task.name)}</span>
                 {durationLabel && (
-                  <span className="kratos-task-chip__duration">{durationLabel}</span>
+                  <span className="maaspal-task-chip__duration">{durationLabel}</span>
                 )}
                 {badgeColor && (
                   <span
-                    className="kratos-task-chip__assertion-badge"
+                    className="maaspal-task-chip__assertion-badge"
                     style={{ background: badgeColor }}
                     title={`Assertions: ${task.assertions_status}`}
                   />
                 )}
               </div>
               {pct !== null && (
-                <div className="kratos-task-chip__progress-wrap">
-                  <div className="kratos-task-chip__progress-bar">
+                <div className="maaspal-task-chip__progress-wrap">
+                  <div className="maaspal-task-chip__progress-bar">
                     <div
-                      className="kratos-task-chip__progress-fill"
+                      className="maaspal-task-chip__progress-fill"
                       style={{ width: `${pct}%` }}
                     />
                   </div>
-                  <span className="kratos-task-chip__progress-label">
+                  <span className="maaspal-task-chip__progress-label">
                     {task.progress!.current} / {task.progress!.total}
                   </span>
                 </div>

@@ -132,21 +132,21 @@ export function RunDetail({ runId, onBack }: Props) {
   return (
     <Page>
       <PageSection>
-        <div className="kratos-run-detail-bar">
+        <div className="maaspal-run-detail-bar">
           <Button variant="link" isInline onClick={onBack}>
             ← Back
           </Button>
 
           {run ? (
-            <div className="kratos-run-detail-meta">
-              <span className="kratos-run-detail-meta__item">
+            <div className="maaspal-run-detail-meta">
+              <span className="maaspal-run-detail-meta__item">
                 <strong>{formatScenarioName(run.scenario)}</strong>
               </span>
-              <span className="kratos-run-detail-meta__item">
+              <span className="maaspal-run-detail-meta__item">
                 <StatusDot status={run.status} />
                 <strong>{run.status}</strong>
               </span>
-              <span className="kratos-run-detail-meta__item">
+              <span className="maaspal-run-detail-meta__item">
                 Started: <strong>{new Date(run.created_at).toLocaleString()}</strong>
               </span>
               {(() => {
@@ -157,13 +157,13 @@ export function RunDetail({ runId, onBack }: Props) {
                     : null
                   : (run.duration_ms ?? null);
                 return durationMs !== null ? (
-                  <span className="kratos-run-detail-meta__item">
+                  <span className="maaspal-run-detail-meta__item">
                     Duration: <strong>{formatDuration(durationMs)}</strong>
                   </span>
                 ) : null;
               })()}
               <span
-                className="kratos-run-detail-meta__item"
+                className="maaspal-run-detail-meta__item"
                 title={runId}
                 style={{ fontFamily: 'monospace', fontSize: '0.78rem', color: '#aaa' }}
               >
@@ -193,7 +193,7 @@ export function RunDetail({ runId, onBack }: Props) {
 
         <Grid hasGutter>
           <GridItem span={8}>
-            <p className="kratos-section-heading">Live Logs</p>
+            <p className="maaspal-section-heading">Live Logs</p>
             <LogStream runId={runId} />
           </GridItem>
           <GridItem span={4}>

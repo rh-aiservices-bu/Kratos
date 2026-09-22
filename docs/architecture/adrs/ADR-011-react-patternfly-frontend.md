@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The Kratos UI needs to display a scenario list, trigger runs, stream live logs via SSE, and show run history. A technology choice must be made for the frontend.
+The MaaS:PAL UI needs to display a scenario list, trigger runs, stream live logs via SSE, and show run history. A technology choice must be made for the frontend.
 
 The RHOAI Dashboard (and its plugin ecosystem, including `rh-ai-community-plugins/hello-world`) is built on **React + TypeScript + PatternFly**. PatternFly is Red Hat's open-source design system and component library, used consistently across OpenShift and RHOAI UIs.
 
@@ -18,7 +18,7 @@ Options considered:
 
 ## Decision
 
-Use **React + TypeScript + PatternFly** for the Kratos UI, mirroring the stack used in `rh-ai-community-plugins/hello-world`. Static assets are compiled and served by FastAPI's `StaticFiles` mount.
+Use **React + TypeScript + PatternFly** for the MaaS:PAL UI, mirroring the stack used in `rh-ai-community-plugins/hello-world`. Static assets are compiled and served by FastAPI's `StaticFiles` mount.
 
 Key technologies:
 - **React**: component model, state management, `EventSource` integration for SSE log streaming

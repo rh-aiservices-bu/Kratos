@@ -45,7 +45,7 @@ async def test_direct_inference_no_api_keys_created() -> None:
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             f"{maas_url}/maas-api/v1/api-keys/search",
-            json={"name_prefix": "kratos-"},
+            json={"name_prefix": "maaspal-"},
             headers={"Authorization": f"Bearer {sa_token}"},
         )
         resp.raise_for_status()

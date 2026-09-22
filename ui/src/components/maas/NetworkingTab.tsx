@@ -59,7 +59,7 @@ export function NetworkingTab() {
 
   return (
     <>
-      <p className="kratos-section-heading">Gateways</p>
+      <p className="maaspal-section-heading">Gateways</p>
       {gatewaysUnavailable ? (
         <MaasUnavailableNotice reason={gatewaysUnavailable} />
       ) : (
@@ -113,7 +113,7 @@ export function NetworkingTab() {
         </Table>
       )}
 
-      <p className="kratos-section-heading" style={{ marginTop: '1.5rem' }}>HTTP Routes</p>
+      <p className="maaspal-section-heading" style={{ marginTop: '1.5rem' }}>HTTP Routes</p>
       {routesUnavailable ? (
         <MaasUnavailableNotice reason={routesUnavailable} />
       ) : (

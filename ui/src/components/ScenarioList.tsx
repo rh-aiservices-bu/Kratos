@@ -53,7 +53,7 @@ function ScenarioCard({ scenario, onRun }: { scenario: Scenario; onRun: (s: Scen
       <CardBody style={{ padding: '0.75rem 1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="kratos-scenario-name" style={{ marginBottom: '0.25rem' }}>
+            <div className="maaspal-scenario-name" style={{ marginBottom: '0.25rem' }}>
               {formatScenarioName(scenario.name)}
             </div>
             <p style={{ margin: 0, color: '#666', fontSize: '0.8rem', lineHeight: 1.4 }}>
@@ -119,7 +119,7 @@ export function ScenarioList({ onRun }: Props) {
 
         return (
           <StackItem key={category}>
-            <p className="kratos-section-heading" style={{ marginBottom: '0.5rem' }}>
+            <p className="maaspal-section-heading" style={{ marginBottom: '0.5rem' }}>
               {category}
             </p>
             {items.length === 0 ? (
@@ -130,7 +130,7 @@ export function ScenarioList({ onRun }: Props) {
             ) : (
               <Stack hasGutter>
                 {items.map((s) => (
-                  <StackItem key={s.name} className="kratos-scenario-card">
+                  <StackItem key={s.name} className="maaspal-scenario-card">
                     <ScenarioCard scenario={s} onRun={onRun} />
                   </StackItem>
                 ))}

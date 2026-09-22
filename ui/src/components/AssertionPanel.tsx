@@ -58,7 +58,7 @@ function AssertionCard({ a, muted }: { a: AssertionState; muted: boolean }) {
   const bg = ASSERTION_BG[a.status];
   return (
     <div
-      className="kratos-assertion-card"
+      className="maaspal-assertion-card"
       style={
         {
           '--assertion-color': color,
@@ -68,15 +68,15 @@ function AssertionCard({ a, muted }: { a: AssertionState; muted: boolean }) {
         } as React.CSSProperties
       }
     >
-      <span className="kratos-assertion-card__name">{formatName(a.name)}</span>
-      <span className="kratos-assertion-card__value">
+      <span className="maaspal-assertion-card__name">{formatName(a.name)}</span>
+      <span className="maaspal-assertion-card__value">
         {formatValue(a.value)}
         {a.expected_value != null && ` vs. expected ${formatValue(a.expected_value)}`}
       </span>
       {a.expression && (
-        <span className="kratos-assertion-card__expr">target: {a.expression}</span>
+        <span className="maaspal-assertion-card__expr">target: {a.expression}</span>
       )}
-      <span className="kratos-assertion-card__status">
+      <span className="maaspal-assertion-card__status">
         <span>{STATUS_ICON[a.status]}</span>
         <span>{a.status}</span>
       </span>
@@ -101,15 +101,15 @@ function AssertionGroup({
     : null;
 
   return (
-    <div className="kratos-assertion-group" style={{ opacity: muted ? 0.72 : 1 }}>
+    <div className="maaspal-assertion-group" style={{ opacity: muted ? 0.72 : 1 }}>
       <div
-        className="kratos-assertion-group__header"
+        className="maaspal-assertion-group__header"
         style={{ borderBottomColor: borderColor }}
       >
-        <span className="kratos-assertion-group__title">{label}</span>
+        <span className="maaspal-assertion-group__title">{label}</span>
         {statusLabel && (
           <span
-            className="kratos-assertion-group__status"
+            className="maaspal-assertion-group__status"
             style={{ color: borderColor }}
           >
             {statusLabel}
@@ -129,7 +129,7 @@ export function AssertionPanel({ assertions, taskProgress }: Props) {
   if (assertions.length === 0) {
     return (
       <div>
-        <p className="kratos-section-heading">Assertions</p>
+        <p className="maaspal-section-heading">Assertions</p>
         <p style={{ color: '#aaa', fontSize: '0.85rem', fontStyle: 'italic' }}>
           Waiting for assertion data…
         </p>
@@ -167,7 +167,7 @@ export function AssertionPanel({ assertions, taskProgress }: Props) {
 
   return (
     <div>
-      <p className="kratos-section-heading">Assertions</p>
+      <p className="maaspal-section-heading">Assertions</p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         {taskGroups.map(({ key, entries, progress }, idx) => {
           const isRunning = progress?.status === 'RUNNING';

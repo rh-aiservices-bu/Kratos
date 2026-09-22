@@ -2,10 +2,10 @@ import { Alert } from '@patternfly/react-core';
 
 const REASON_TEXT: Record<string, string> = {
   forbidden:
-    "The Kratos service account isn't authorized to read this. Ask your cluster admin to apply deploy/rbac-maas-readonly.yaml.",
+    "The MaaS:PAL service account isn't authorized to read this. Ask your cluster admin to apply deploy/rbac-maas-readonly.yaml.",
   not_installed: "The underlying resource isn't installed on this cluster — this MaaS version or install may not support it.",
-  unreachable: "Could not reach the cluster's API server at all — check the kubeconfig/network Kratos is running with.",
-  network_error: 'Could not reach the Kratos API server.',
+  unreachable: "Could not reach the cluster's API server at all — check the kubeconfig/network MaaS:PAL is running with.",
+  network_error: 'Could not reach the MaaS:PAL API server.',
 };
 
 interface Props {

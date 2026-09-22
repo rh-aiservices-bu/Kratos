@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Kratos needs to persist run history (metadata: scenario name, start/end time, status, assertions outcome) and per-run task results so the UI can show a history view and the operator can review past runs.
+MaaS:PAL needs to persist run history (metadata: scenario name, start/end time, status, assertions outcome) and per-run task results so the UI can show a history view and the operator can review past runs.
 
 Options considered:
 
@@ -17,7 +17,7 @@ Options considered:
 
 ## Decision
 
-Use **SQLite on a PVC** at `/data/kratos.db`. The API server reads and writes run history via `aiosqlite`. In addition, each run's full result is also written as a JSON file at `/data/results/<run-id>.json` for easy inspection without a database client.
+Use **SQLite on a PVC** at `/data/maaspal.db`. The API server reads and writes run history via `aiosqlite`. In addition, each run's full result is also written as a JSON file at `/data/results/<run-id>.json` for easy inspection without a database client.
 
 Schema:
 - `runs` table: run ID, scenario name, status, timestamps, assertion outcomes
@@ -28,7 +28,7 @@ The PVC is mounted into both the API server `Deployment` and the Job pods so bot
 ## Consequences
 
 **Positive:**
-- Zero external infrastructure: everything Kratos needs is in the single OCP namespace.
+- Zero external infrastructure: everything MaaS:PAL needs is in the single OCP namespace.
 - `aiosqlite` integrates natively with FastAPI's async event loop.
 - The JSON sidecar files at `/data/results/` are human-readable without any tooling.
 - SQLite is sufficient for the access pattern: writes are infrequent (one per run), reads are by the API server only.
@@ -39,4 +39,4 @@ The PVC is mounted into both the API server `Deployment` and the Job pods so bot
 - No built-in backup or point-in-time recovery. For an admin testing tool, this is acceptable.
 
 **Neutral:**
-- The database file is at `/data/kratos.db`; the PVC is mounted at `/data` in all pods.
+- The database file is at `/data/maaspal.db`; the PVC is mounted at `/data` in all pods.

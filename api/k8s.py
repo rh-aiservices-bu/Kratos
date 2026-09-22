@@ -4,14 +4,14 @@ import threading
 import time
 from pathlib import Path
 
-IMAGE = os.environ.get("KRATOS_IMAGE", "quay.io/wparker/kratos:latest")
-NAMESPACE = os.environ.get("NAMESPACE", "kratos")
-_GLOBAL_CM = "kratos-global-config"
+IMAGE = os.environ.get("MAASPAL_IMAGE", "quay.io/rh-aiservices-bu/maaspal:latest")
+NAMESPACE = os.environ.get("NAMESPACE", "maaspal")
+_GLOBAL_CM = "maaspal-global-config"
 # How long a run's pod gets, after stop_run() asks it to stop, before Kubernetes
 # SIGKILLs it — must comfortably exceed worst-case cleanup time (sequential MaaS
 # API key revocation, MaaSSubscription CR restore). Generous default; the harness
 # itself typically finishes cleanup and exits well before this is ever reached.
-_STOP_GRACE_PERIOD_S = int(os.environ.get("KRATOS_STOP_GRACE_PERIOD_S", "120"))
+_STOP_GRACE_PERIOD_S = int(os.environ.get("MAASPAL_STOP_GRACE_PERIOD_S", "120"))
 
 _DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 _LOGS_DIR = _DATA_DIR / "logs"
@@ -35,7 +35,7 @@ def _api_server_node(k8s: object) -> str | None:
     try:
         core = k8s.CoreV1Api()  # type: ignore[attr-defined]
         pods = core.list_namespaced_pod(
-            namespace=NAMESPACE, label_selector="app=kratos"
+            namespace=NAMESPACE, label_selector="app=maaspal"
         )
         if pods.items:
             return pods.items[0].spec.node_name
@@ -51,13 +51,13 @@ def create_job(scenario: str, run_id: str, config_overrides: dict | None = None)
 
     extra_env = [
         k8s.V1EnvVar(
-            name="KRATOS_CONFIG_OVERRIDES",
+            name="MAASPAL_CONFIG_OVERRIDES",
             value=json.dumps(config_overrides or {}),
         )
     ]
 
     pod_spec = k8s.V1PodSpec(
-        service_account_name="kratos",
+        service_account_name="maaspal",
         restart_policy="Never",
         node_name=node_name,
         termination_grace_period_seconds=_STOP_GRACE_PERIOD_S,
@@ -89,25 +89,25 @@ def create_job(scenario: str, run_id: str, config_overrides: dict | None = None)
             k8s.V1Volume(
                 name="data",
                 persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
-                    claim_name="kratos-data"
+                    claim_name="maaspal-data"
                 ),
             ),
             k8s.V1Volume(
                 name="scenarios",
-                config_map=k8s.V1ConfigMapVolumeSource(name="kratos-scenarios"),
+                config_map=k8s.V1ConfigMapVolumeSource(name="maaspal-scenarios"),
             ),
         ],
     )
 
     safe_scenario = scenario.lower().replace("_", "-")[:12].rstrip("-")
-    job_name = f"kratos-{safe_scenario}-{run_id[:6]}"
+    job_name = f"maaspal-{safe_scenario}-{run_id[:6]}"
 
     job = k8s.V1Job(
         metadata=k8s.V1ObjectMeta(name=job_name),
         spec=k8s.V1JobSpec(
             ttl_seconds_after_finished=3600,
             template=k8s.V1PodTemplateSpec(
-                metadata=k8s.V1ObjectMeta(labels={"kratos-run-id": run_id}),
+                metadata=k8s.V1ObjectMeta(labels={"maaspal-run-id": run_id}),
                 spec=pod_spec,
             ),
         ),
@@ -135,7 +135,7 @@ def stop_run(run_id: str) -> bool:
     k8s = _kube()
     core = k8s.CoreV1Api()
     pods = core.list_namespaced_pod(
-        namespace=NAMESPACE, label_selector=f"kratos-run-id={run_id}"
+        namespace=NAMESPACE, label_selector=f"maaspal-run-id={run_id}"
     )
     if not pods.items:
         return False
@@ -169,7 +169,7 @@ def _capture_logs(run_id: str) -> None:
 
         k8s = _kube()
         core = k8s.CoreV1Api()
-        label = f"kratos-run-id={run_id}"
+        label = f"maaspal-run-id={run_id}"
 
         # Wait for the pod to appear (up to 120 s).
         pod_name: str | None = None

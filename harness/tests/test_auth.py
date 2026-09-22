@@ -118,7 +118,7 @@ async def test_provision_api_key_uses_default_name(httpx_mock: HTTPXMock) -> Non
     assert result.status == "PASS"
     req = httpx_mock.get_requests()[0]
     body = json.loads(req.content)
-    assert body["name"].startswith("kratos-")
+    assert body["name"].startswith("maaspal-")
 
 
 async def test_provision_api_key_binds_explicit_subscription(httpx_mock: HTTPXMock) -> None:
@@ -133,13 +133,13 @@ async def test_provision_api_key_binds_explicit_subscription(httpx_mock: HTTPXMo
     )
 
     task = ProvisionApiKeyTask(
-        "provision_api_key", {"key_name": "test-key", "subscription": "kratos-rate-limit-test"}
+        "provision_api_key", {"key_name": "test-key", "subscription": "maaspal-rate-limit-test"}
     )
     await task.run(_make_ctx())
 
     req = httpx_mock.get_requests()[0]
     body = json.loads(req.content)
-    assert body["subscription"] == "kratos-rate-limit-test"
+    assert body["subscription"] == "maaspal-rate-limit-test"
 
 
 async def test_provision_api_key_omits_subscription_field_when_not_set(httpx_mock: HTTPXMock) -> None:
@@ -163,13 +163,13 @@ async def test_provision_api_key_checks_response_echo(httpx_mock: HTTPXMock) -> 
             "id": "key-1",
             "key": "sk-1",
             "name": "test-key",
-            "subscription": "kratos-rate-limit-test",
+            "subscription": "maaspal-rate-limit-test",
             "expiresAt": "2027-01-01T00:00:00Z",
         },
     )
 
     task = ProvisionApiKeyTask(
-        "provision_api_key", {"key_name": "test-key", "subscription": "kratos-rate-limit-test"}
+        "provision_api_key", {"key_name": "test-key", "subscription": "maaspal-rate-limit-test"}
     )
     ctx = _make_ctx()
     await task.run(ctx)
@@ -198,7 +198,7 @@ async def test_provision_api_key_checks_flag_mismatches(httpx_mock: HTTPXMock) -
     )
 
     task = ProvisionApiKeyTask(
-        "provision_api_key", {"key_name": "test-key", "subscription": "kratos-rate-limit-test"}
+        "provision_api_key", {"key_name": "test-key", "subscription": "maaspal-rate-limit-test"}
     )
     ctx = _make_ctx()
     await task.run(ctx)
@@ -234,12 +234,12 @@ async def test_provision_api_key_expect_subscription_matches(httpx_mock: HTTPXMo
     httpx_mock.add_response(
         url="http://maas.test/maas-api/v1/api-keys",
         method="POST",
-        json={"id": "key-1", "key": "sk-1", "subscription": "kratos-priority-high"},
+        json={"id": "key-1", "key": "sk-1", "subscription": "maaspal-priority-high"},
     )
 
     task = ProvisionApiKeyTask(
         "provision_api_key",
-        {"key_name": "test-key", "expect_subscription": "kratos-priority-high"},
+        {"key_name": "test-key", "expect_subscription": "maaspal-priority-high"},
     )
     ctx = _make_ctx()
     await task.run(ctx)
@@ -262,12 +262,12 @@ async def test_provision_api_key_expect_subscription_mismatch(httpx_mock: HTTPXM
     httpx_mock.add_response(
         url="http://maas.test/maas-api/v1/api-keys",
         method="POST",
-        json={"id": "key-1", "key": "sk-1", "subscription": "kratos-priority-low"},
+        json={"id": "key-1", "key": "sk-1", "subscription": "maaspal-priority-low"},
     )
 
     task = ProvisionApiKeyTask(
         "provision_api_key",
-        {"key_name": "test-key", "expect_subscription": "kratos-priority-high"},
+        {"key_name": "test-key", "expect_subscription": "maaspal-priority-high"},
     )
     ctx = _make_ctx()
     await task.run(ctx)
@@ -313,11 +313,14 @@ async def test_verify_api_key_search_matches_expected_count(httpx_mock: HTTPXMoc
     httpx_mock.add_response(
         url="http://maas.test/maas-api/v1/api-keys/search",
         method="POST",
-        json={"items": [{"id": "id-1"}, {"id": "id-2"}]},
+        json={"data": [
+            {"id": "id-1", "name": "maaspal-lifecycle-key-1", "status": "active"},
+            {"id": "id-2", "name": "maaspal-lifecycle-key-2", "status": "active"},
+        ], "has_more": False},
     )
 
     ctx = _make_ctx({"api_keys": [{"id": "id-1", "key": "sk-1"}, {"id": "id-2", "key": "sk-2"}]})
-    task = VerifyApiKeySearchTask("verify_api_key_search", {"name_prefix": "kratos-lifecycle-key"})
+    task = VerifyApiKeySearchTask("verify_api_key_search", {"name_prefix": "maaspal-lifecycle-key"})
     result = await task.run(ctx)
 
     assert result.status == "PASS"
@@ -328,15 +331,15 @@ async def test_verify_api_key_search_sends_name_prefix(httpx_mock: HTTPXMock) ->
     httpx_mock.add_response(
         url="http://maas.test/maas-api/v1/api-keys/search",
         method="POST",
-        json={"items": []},
+        json={"data": [], "has_more": False},
     )
 
-    task = VerifyApiKeySearchTask("verify_api_key_search", {"name_prefix": "kratos-lifecycle-key"})
+    task = VerifyApiKeySearchTask("verify_api_key_search", {"name_prefix": "maaspal-lifecycle-key"})
     await task.run(_make_ctx())
 
     req = httpx_mock.get_requests()[0]
     body = json.loads(req.content)
-    assert body == {"name_prefix": "kratos-lifecycle-key"}
+    assert body == {"name_prefix": "maaspal-lifecycle-key"}
 
     req = httpx_mock.get_requests()[0]
     body = json.loads(req.content)

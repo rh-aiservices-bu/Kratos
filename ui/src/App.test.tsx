@@ -14,5 +14,5 @@ test('renders the app heading', async () => {
   render(<App />);
 
   // findByRole waits for async state updates from ScenarioList and RunHistory
-  expect(await screen.findByRole('heading', { name: /kratos/i })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: /maas:pal/i })).toBeInTheDocument();
 });

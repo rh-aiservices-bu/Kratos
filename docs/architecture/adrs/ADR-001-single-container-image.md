@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Kratos has two distinct runtime roles:
+MaaS:PAL has two distinct runtime roles:
 
 1. **API server** — a long-running FastAPI process that serves the UI, manages run history, and creates Kubernetes Jobs.
 2. **Job runner** — a short-lived process that executes a scenario (loads config, runs tasks, writes results).

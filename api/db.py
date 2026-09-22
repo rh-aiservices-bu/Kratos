@@ -6,7 +6,7 @@ import aiosqlite
 
 
 def get_db_path() -> str:
-    return os.environ.get("DB_PATH", "/data/kratos.db")
+    return os.environ.get("DB_PATH", "/data/maaspal.db")
 
 
 async def init_db() -> None:

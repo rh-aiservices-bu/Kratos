@@ -1,8 +1,8 @@
-# Kratos — Implementation Plan
+# MaaS:PAL — Implementation Plan
 
 ## Overview
 
-This document breaks the Kratos project into discrete, ordered phases. Each phase has a clear scope, a set of deliverables, and a **Verification** section — the exact commands or steps that confirm the phase milestone is met before moving on.
+This document breaks the MaaS:PAL project into discrete, ordered phases. Each phase has a clear scope, a set of deliverables, and a **Verification** section — the exact commands or steps that confirm the phase milestone is met before moving on.
 
 Cross-cutting concerns (documentation, CI, deployment manifests) are given their own phases rather than being treated as afterthoughts bolted onto feature phases.
 
@@ -334,7 +334,7 @@ Manual browser checks:
 1. `node-builder` stage — installs npm deps, runs `npm run build`, outputs `ui/dist/`
 2. Final stage — copies `ui/dist/` + Python source; default CMD is `uvicorn api.main:app`
 
-**Deploy manifests** (`deploy/`): `serviceaccount.yaml`, `rbac.yaml`, `pvc.yaml`, `configmap-global.yaml`, `deployment.yaml`, `service.yaml`, `route.yaml`; plus a repo-root `kustomization.yaml` (`oc apply -k .`) that also generates the `kratos-scenarios` ConfigMap from `scenarios/*.yaml` via `configMapGenerator` — it lives at the repo root rather than inside `deploy/` because kustomize's file-load security restriction only allows a `configMapGenerator` to reference files at or below the kustomization's own directory
+**Deploy manifests** (`deploy/`): `serviceaccount.yaml`, `rbac.yaml`, `pvc.yaml`, `configmap-global.yaml`, `deployment.yaml`, `service.yaml`, `route.yaml`; plus a repo-root `kustomization.yaml` (`oc apply -k .`) that also generates the `maaspal-scenarios` ConfigMap from `scenarios/*.yaml` via `configMapGenerator` — it lives at the repo root rather than inside `deploy/` because kustomize's file-load security restriction only allows a `configMapGenerator` to reference files at or below the kustomization's own directory
 
 **Makefile** — finalised targets: `build`, `push`, `deploy`, `dev`, `test`, `lint`
 
@@ -343,32 +343,32 @@ Manual browser checks:
 ```bash
 # Image builds without error
 make build
-docker images | grep kratos   # image present
+podman images | grep maaspal   # image present
 
 # Image starts as API server
-docker run --rm -p 8000:8000 quay.io/wparker/kratos:latest
+docker run --rm -p 8000:8000 quay.io/rh-aiservices-bu/maaspal:latest
 curl http://localhost:8000/api/scenarios   # returns scenario list from embedded ConfigMap
 
 # Image starts as harness job entrypoint (expect a config error — no cluster available)
-docker run --rm quay.io/wparker/kratos:latest \
+docker run --rm quay.io/rh-aiservices-bu/maaspal:latest \
   python -m harness.main --scenario single_key_load --run-id smoke-001
 # expect: startup log lines then a config/connection error (not an import crash)
 
 # Deploy to cluster
 make push
 make deploy
-oc get pods -n kratos   # API server pod Running
-oc get route -n kratos  # Route present with host
+oc get pods -n maaspal   # API server pod Running
+oc get route -n maaspal  # Route present with host
 
 # Open Route URL in browser — UI loads and scenario list appears
 ```
 
 Post-phase checklist:
-- [ ] `make build` completes with no errors; `docker images | grep kratos` shows the image
-- [ ] `docker run --rm -p 8000:8000 quay.io/wparker/kratos:latest` starts and `curl http://localhost:8000/api/scenarios` returns the scenario list (not a 404 or crash)
+- [ ] `make build` completes with no errors; `podman images | grep maaspal` shows the image
+- [ ] `docker run --rm -p 8000:8000 quay.io/rh-aiservices-bu/maaspal:latest` starts and `curl http://localhost:8000/api/scenarios` returns the scenario list (not a 404 or crash)
 - [ ] Running the harness entrypoint inside Docker prints startup log lines before failing on the missing cluster — no `ImportError` or `ModuleNotFoundError`
-- [ ] `oc get pods -n kratos` shows the API server pod in `Running` state (not `CrashLoopBackOff`)
-- [ ] Opening the Route URL in a browser loads the Kratos UI and the scenario list is visible
+- [ ] `oc get pods -n maaspal` shows the API server pod in `Running` state (not `CrashLoopBackOff`)
+- [ ] Opening the Route URL in a browser loads the MaaS:PAL UI and the scenario list is visible
 
 ### Dependencies
 
@@ -401,7 +401,7 @@ Manual E2E checklist (browser):
 - [ ] Trigger `direct_inference` — no MaaS API keys created or revoked
 - [ ] Trigger `rate_limit_validation` — `MaaSSubscription` CR restored to original state after run
 - [ ] Trigger `metrics_fill` — `total_requests` and `total_tokens` non-zero in logs
-- [ ] After every run: confirm no `kratos-*` MaaS API keys remain (`GET /maas-api/v1/api-keys/search`)
+- [ ] After every run: confirm no `maaspal-*` MaaS API keys remain (`GET /maas-api/v1/api-keys/search`)
 - [ ] All completed runs visible in Run History with correct PASS/FAIL status
 
 ### Dependencies
@@ -432,14 +432,14 @@ Manual E2E checklist (browser):
 # Create a version tag
 git tag v0.1.0 && git push origin v0.1.0
 # observe: release workflow runs; image pushed with both :v0.1.0 and :<git-sha> tags
-docker pull quay.io/wparker/kratos:v0.1.0
+docker pull quay.io/rh-aiservices-bu/maaspal:v0.1.0
 ```
 
 Post-phase checklist:
 - [ ] Open a PR with a trivial change; all three jobs (lint, test, build) show green ticks in the GitHub Actions tab
 - [ ] A PR with a deliberate lint error (e.g. unused import) causes the lint job to fail and block merge
 - [ ] Merging to `main` triggers the same three jobs and they pass on the merge commit
-- [ ] Pushing `v0.1.0` tag triggers the release workflow; `docker pull quay.io/wparker/kratos:v0.1.0` succeeds after it completes
+- [ ] Pushing `v0.1.0` tag triggers the release workflow; `docker pull quay.io/rh-aiservices-bu/maaspal:v0.1.0` succeeds after it completes
 
 ### Dependencies
 
@@ -464,7 +464,7 @@ Post-phase checklist:
 ### Verification
 
 Post-phase checklist (follow each guide cold, with no other context):
-- [ ] `README.md` — can describe what Kratos does and how to deploy it after reading only the README
+- [ ] `README.md` — can describe what MaaS:PAL does and how to deploy it after reading only the README
 - [ ] `docs/guides/quickstart.md` — deploy to a fresh cluster and trigger the first scenario run using only the quickstart steps; no improvisation needed
 - [ ] `docs/guides/scenario-authoring.md` — write a new scenario YAML from scratch; it loads without validation errors and runs via the CLI
 - [ ] `docs/guides/task-development.md` — add a new stub task class; it appears in `REGISTRY` and a scenario can invoke it; unit test passes

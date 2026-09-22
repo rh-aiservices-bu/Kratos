@@ -1,15 +1,15 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: kratos-global-config
-  namespace: kratos
+  name: maaspal-global-config
+  namespace: maaspal
 data:
   MAAS_API_URL: "https://maas.apps.cluster-rkmhx.rkmhx.sandbox1230.opentlc.com"
-  DEFAULT_MODEL: "RedHatAI/Ministral-3-3B-Instruct-2512" #"publishers/llms/models/redhataiministral-3-3b-instruc" 
+  DEFAULT_MODEL: "RedHatAI/Ministral-3-3B-Instruct-2512" #"publishers/llms/models/redhataiministral-3-3b-instruc"
   DEFAULT_SUBSCRIPTION: ""  # empty = auto-select highest priority
-  NAMESPACE: "kratos"
-  KRATOS_IMAGE: "quay.io/rlundber/kratos:0.1"
-  DB_PATH: "/data/kratos.db"
+  NAMESPACE: "maaspal"
+  MAASPAL_IMAGE: "quay.io/rh-aiservices-bu/maaspal:latest"
+  DB_PATH: "/data/maaspal.db"
   SCENARIOS_DIR: "/app/scenarios"
   # Thanos Querier instant-query endpoint backing MaaS metrics cross-validation (see
   # docs/architecture/adrs/ADR-014, ADR-015, and docs/architecture/maas-metrics-reference.md).

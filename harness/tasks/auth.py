@@ -59,7 +59,7 @@ async def _revoke_keys(ctx: TaskContext) -> int:
 class ProvisionApiKeyTask(Task):
     async def run(self, ctx: TaskContext) -> TaskResult:
         start = time.monotonic()
-        key_name = str(self.params.get("key_name") or f"kratos-{ctx.run_id[:8]}")
+        key_name = str(self.params.get("key_name") or f"maaspal-{ctx.run_id[:8]}")
         count = int(self.params.get("count", 1))
         # Explicit subscription binding — without it, key creation
         # auto-selects whichever subscription the caller's identity resolves
@@ -213,9 +213,19 @@ class VerifyApiKeySearchTask(Task):
                 headers={"Authorization": f"Bearer {ctx.sa_token}"},
             )
             resp.raise_for_status()
-            data = resp.json()
+            resp_body = resp.json()
 
-        found = data.get("items", [])
+        # The MaaS search API uses "data" (not "items") and ignores name_prefix
+        # server-side — it returns all keys for the caller regardless, newest
+        # first, paginated (has_more). We filter client-side: prefix match +
+        # active status only, so revoked keys from previous runs with the same
+        # prefix don't inflate the count.
+        all_items = resp_body.get("data", [])
+        print(f"[verify_api_key_search] response: {len(all_items)} total keys, has_more={resp_body.get('has_more')}", flush=True)
+        found = [
+            item for item in all_items
+            if item.get("name", "").startswith(name_prefix) and item.get("status") == "active"
+        ] if name_prefix else all_items
         found_count = len(found)
         expected_count = len(ctx.shared_state.get("api_keys", []))
         ctx.shared_state["search_check"] = {

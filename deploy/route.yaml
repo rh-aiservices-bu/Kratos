@@ -1,8 +1,8 @@
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: kratos
-  namespace: kratos
+  name: maaspal
+  namespace: maaspal
   annotations:
     # Disable HAProxy's backend timeout so long-lived SSE connections
     # (log streaming) are not killed after the default 30 s idle period.
@@ -14,7 +14,7 @@ metadata:
 spec:
   to:
     kind: Service
-    name: kratos
+    name: maaspal
   port:
     targetPort: 8000
   tls:

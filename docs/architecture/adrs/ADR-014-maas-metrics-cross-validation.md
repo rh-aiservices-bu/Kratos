@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Kratos needs to validate that what MaaS/RHOAI *reports* (total requests, total tokens — the numbers shown on the MaaS dashboard) actually reflects what the harness *knows it sent*, not merely that some metric is non-zero. This surfaced two problems in the prior design:
+MaaS:PAL needs to validate that what MaaS/RHOAI *reports* (total requests, total tokens — the numbers shown on the MaaS dashboard) actually reflects what the harness *knows it sent*, not merely that some metric is non-zero. This surfaced two problems in the prior design:
 
 1. **Namespace collision**: `harness/result.py`'s assertion lookup checked `shared_state["inference_results"]` before `shared_state["metrics"]`. Since both the harness's own request counter and the MaaS-side poller wrote a key literally named `total_requests`, an assertion named `total_requests` could only ever resolve to the harness's own client-side count — it was structurally impossible to see the MaaS-reported value through it.
 2. **No cross-metric comparison**: the assertion engine only supported `metric_name: "<operator> <constant>"`. There was no way to express "MaaS-reported count should equal harness-sent count."
@@ -66,7 +66,7 @@ assertions:
 - One consolidated fetch client instead of two duplicated implementations.
 
 **Negative:**
-- `authorized_calls`/`authorized_hits` aggregate *all* callers hitting that route, not just Kratos's own traffic — baseline-delta isolates by time, not by caller. Low risk on the researched cluster (a dedicated MaaS test sandbox with one simulator model), but would need a caller-scoped query (if the deployed Limitador ever exposes a `user`/`subscription` label) on a busier shared cluster.
+- `authorized_calls`/`authorized_hits` aggregate *all* callers hitting that route, not just MaaS:PAL's own traffic — baseline-delta isolates by time, not by caller. Low risk on the researched cluster (a dedicated MaaS test sandbox with one simulator model), but would need a caller-scoped query (if the deployed Limitador ever exposes a `user`/`subscription` label) on a busier shared cluster.
 - Tolerance-band comparison means an assertion can pass despite some real drift — accepted tradeoff for run speed; the tolerance is scenario-configurable if tighter validation is later needed.
 - The dict-form assertion is a second code path in `harness/result.py`'s evaluator; scenario authors need to know when to use which form.
 - The bounded settle retry adds real wall-clock time to a run whose traffic genuinely stopped exactly at a scrape boundary (worst case, up to `max_wait_s`) — accepted since the alternative is a false FAILING on a correct run, which is worse for a testing harness than a slower one.

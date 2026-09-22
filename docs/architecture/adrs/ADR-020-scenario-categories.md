@@ -23,7 +23,7 @@ Accepted
 
 **Negative:**
 - The category-order lists live in two places (`ui/src/components/ScenarioList.tsx`'s `CATEGORY_ORDER` and `harness/tests/test_scenarios.py`'s `_KNOWN_CATEGORIES`) with no shared source of truth across the Python/TypeScript boundary — adding a 6th built-in category means remembering to update both by hand. Acceptable at 5 categories; would be worth deriving one from the other (or a small shared JSON) if this grows much further.
-- No UI affordance yet for a user to *set* a scenario's category without hand-editing YAML — appropriate for now since Kratos has no scenario-authoring UI at all, just a YAML-drop-in convention.
+- No UI affordance yet for a user to *set* a scenario's category without hand-editing YAML — appropriate for now since MaaS:PAL has no scenario-authoring UI at all, just a YAML-drop-in convention.
 
 **Neutral:**
 - This is purely a display/organization change — it doesn't affect `POST /api/runs`, task execution, or assertion evaluation in any way.

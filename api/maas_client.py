@@ -515,7 +515,15 @@ def list_models() -> ResourceList:
             }
         )
 
-    return ResourceList(available=True, items=shaped)
+    seen: set[tuple[str | None, str | None]] = set()
+    deduped = []
+    for item in shaped:
+        key = (item["namespace"], item["name"])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+
+    return ResourceList(available=True, items=deduped)
 
 
 def list_auth_policies() -> ResourceList:

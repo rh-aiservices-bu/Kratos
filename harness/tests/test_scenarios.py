@@ -32,9 +32,9 @@ _KNOWN_CATEGORIES = {
 }
 
 
-def test_exactly_nine_production_scenarios() -> None:
-    assert len(_SCENARIO_PATHS) == 9, (
-        f"Expected 9 scenario files, found {len(_SCENARIO_PATHS)}: "
+def test_exactly_ten_production_scenarios() -> None:
+    assert len(_SCENARIO_PATHS) == 10, (
+        f"Expected 10 scenario files, found {len(_SCENARIO_PATHS)}: "
         f"{[p.name for p in _SCENARIO_PATHS]}"
     )
 
@@ -88,16 +88,16 @@ def test_kustomization_scenarios_configmap_matches_directory() -> None:
     """kustomization.yaml's configMapGenerator lists scenario files by hand
     (not a glob, unlike this test's own _SCENARIO_PATHS) — a new scenario
     added to scenarios/ without a matching line here silently never reaches
-    the cluster's kratos-scenarios ConfigMap. Bitten by exactly this twice
+    the cluster's maaspal-scenarios ConfigMap. Bitten by exactly this twice
     already (access_denied_no_policy, then api_key_lifecycle); this test
     exists so a third time fails CI instead of a live deploy.
     """
     kustomization = yaml.safe_load(pathlib.Path("kustomization.yaml").read_text())
     generators = {g["name"]: g for g in kustomization["configMapGenerator"]}
-    listed = {pathlib.Path(f).name for f in generators["kratos-scenarios"]["files"]}
+    listed = {pathlib.Path(f).name for f in generators["maaspal-scenarios"]["files"]}
     on_disk = {p.name for p in _SCENARIO_PATHS}
     assert listed == on_disk, (
-        f"kustomization.yaml's kratos-scenarios ConfigMap file list is out of sync "
+        f"kustomization.yaml's maaspal-scenarios ConfigMap file list is out of sync "
         f"with scenarios/*.yaml. Missing from kustomization.yaml: {on_disk - listed}. "
         f"Listed but not on disk: {listed - on_disk}."
     )

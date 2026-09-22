@@ -103,10 +103,10 @@ export function RunTrigger({ scenario, onConfirm, onCancel }: Props) {
 
       {hasConfig && (
         <>
-          <p className="kratos-section-heading" style={{ marginBottom: '0.75rem' }}>
+          <p className="maaspal-section-heading" style={{ marginBottom: '0.75rem' }}>
             Configuration
           </p>
-          <div className="kratos-config-form">
+          <div className="maaspal-config-form">
             {Object.entries(scenario.config).map(([key, defaultVal]) => {
               const showingPicker = needsModelPicker && !!models && models.length > 0;
 
@@ -123,8 +123,8 @@ export function RunTrigger({ scenario, onConfirm, onCancel }: Props) {
                 const currentKey =
                   currentName && currentNamespace ? `${currentNamespace}/${currentName}` : '';
                 return (
-                  <div key={key} className="kratos-config-form__field">
-                    <label className="kratos-config-form__label" htmlFor="cfg-target_model">
+                  <div key={key} className="maaspal-config-form__field">
+                    <label className="maaspal-config-form__label" htmlFor="cfg-target_model">
                       target model
                     </label>
                     <select
@@ -159,8 +159,8 @@ export function RunTrigger({ scenario, onConfirm, onCancel }: Props) {
               // or came back empty, so the scenario stays usable by hand.
               if (key === _MODEL_NAME_KEY && needsModelPicker && modelsUnavailable) {
                 return (
-                  <div key={key} className="kratos-config-form__field">
-                    <label className="kratos-config-form__label" htmlFor={`cfg-${key}`}>
+                  <div key={key} className="maaspal-config-form__field">
+                    <label className="maaspal-config-form__label" htmlFor={`cfg-${key}`}>
                       {key}
                     </label>
                     <input
@@ -187,8 +187,8 @@ export function RunTrigger({ scenario, onConfirm, onCancel }: Props) {
               const isNumber = typeof defaultVal === 'number';
               const current = values[key];
               return (
-                <div key={key} className="kratos-config-form__field">
-                  <label className="kratos-config-form__label" htmlFor={`cfg-${key}`}>
+                <div key={key} className="maaspal-config-form__field">
+                  <label className="maaspal-config-form__label" htmlFor={`cfg-${key}`}>
                     {key}
                   </label>
                   <input

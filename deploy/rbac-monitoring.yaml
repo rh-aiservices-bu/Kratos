@@ -4,11 +4,11 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: kratos-monitoring-view
+  name: maaspal-monitoring-view
 subjects:
   - kind: ServiceAccount
-    name: kratos
-    namespace: kratos
+    name: maaspal
+    namespace: maaspal
 roleRef:
   kind: ClusterRole
   name: cluster-monitoring-view

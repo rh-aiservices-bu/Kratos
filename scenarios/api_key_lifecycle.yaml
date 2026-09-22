@@ -8,7 +8,7 @@ description: >-
   docs/architecture/empirical-verification-checklist.md).
 category: "API Key Lifecycle"
 config:
-  key_name: "kratos-lifecycle-key"
+  key_name: "maaspal-lifecycle-key"
   key_count: 3
   request_count: 10
   concurrency: 3

@@ -46,7 +46,7 @@ async def test_api_key_lifecycle_no_leftover_keys() -> None:
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             f"{maas_url}/maas-api/v1/api-keys/search",
-            json={"name_prefix": "kratos-lifecycle-key"},
+            json={"name_prefix": "maaspal-lifecycle-key"},
             headers={"Authorization": f"Bearer {sa_token}"},
         )
         resp.raise_for_status()

@@ -20,7 +20,7 @@ COPY scenarios/ scenarios/
 COPY --from=node-builder /build/ui/dist/ ui/dist/
 
 ENV SCENARIOS_DIR=/app/scenarios
-ENV DB_PATH=/data/kratos.db
+ENV DB_PATH=/data/maaspal.db
 
 EXPOSE 8000
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

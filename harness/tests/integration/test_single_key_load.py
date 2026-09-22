@@ -49,7 +49,7 @@ async def test_single_key_load_no_leftover_keys() -> None:
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             f"{maas_url}/maas-api/v1/api-keys/search",
-            json={"name_prefix": "kratos-load-key"},
+            json={"name_prefix": "maaspal-load-key"},
             headers={"Authorization": f"Bearer {sa_token}"},
         )
         resp.raise_for_status()

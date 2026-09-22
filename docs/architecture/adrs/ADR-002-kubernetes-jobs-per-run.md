@@ -22,7 +22,7 @@ Create a **dedicated Kubernetes Job for every scenario run**. The API server cal
 
 **Positive:**
 - Runs are fully isolated: a hung or crashing run cannot affect the API server or other runs.
-- Native Kubernetes observability: pod logs, events, and status are available via standard `kubectl` tooling, not just the Kratos UI.
+- Native Kubernetes observability: pod logs, events, and status are available via standard `kubectl` tooling, not just the MaaS:PAL UI.
 - No persistent worker infrastructure to manage; Jobs are ephemeral by design.
 - Pod resource limits can be set per-Job independently of the API server deployment.
 - The SA token is auto-mounted into the Job pod — no credential management needed.

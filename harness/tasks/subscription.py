@@ -152,7 +152,7 @@ class ApplyRateLimitSubscriptionTask(Task):
     async def run(self, ctx: TaskContext) -> TaskResult:
         start = time.monotonic()
 
-        sub_name = str(self.params.get("subscription_name", "kratos-test-subscription"))
+        sub_name = str(self.params.get("subscription_name", "maaspal-test-subscription"))
         namespace = str(self.params["namespace"])
         model_name = str(self.params["model_name"])
         model_namespace = str(self.params["model_namespace"])

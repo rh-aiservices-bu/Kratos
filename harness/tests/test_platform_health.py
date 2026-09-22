@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 from harness.tasks.base import TaskContext
-from harness.tasks.platform_health import CheckPlatformHealthTask
+from harness.tasks.platform_health import CheckModelHealthTask
 
 _PARAMS = {
     "model_name": "facebook-opt-125m-simulated",
@@ -68,7 +68,7 @@ async def test_all_healthy() -> None:
         api = _mock_api()
         mock_cls.return_value = api
 
-        task = CheckPlatformHealthTask("check_platform_health", _PARAMS)
+        task = CheckModelHealthTask("check_model_health",_PARAMS)
         ctx = _make_ctx()
         result = await task.run(ctx)
 
@@ -85,7 +85,7 @@ async def test_token_rate_limit_policy_not_found() -> None:
         api = _mock_api(trlp_items=[])
         mock_cls.return_value = api
 
-        task = CheckPlatformHealthTask("check_platform_health", _PARAMS)
+        task = CheckModelHealthTask("check_model_health",_PARAMS)
         ctx = _make_ctx()
         await task.run(ctx)
 
@@ -107,7 +107,7 @@ async def test_token_rate_limit_policy_not_enforced() -> None:
         api = _mock_api(trlp_items=[unenforced])
         mock_cls.return_value = api
 
-        task = CheckPlatformHealthTask("check_platform_health", _PARAMS)
+        task = CheckModelHealthTask("check_model_health",_PARAMS)
         ctx = _make_ctx()
         await task.run(ctx)
 
@@ -122,7 +122,7 @@ async def test_gateway_not_programmed() -> None:
         api = _mock_api(gateway=unprogrammed)
         mock_cls.return_value = api
 
-        task = CheckPlatformHealthTask("check_platform_health", _PARAMS)
+        task = CheckModelHealthTask("check_model_health",_PARAMS)
         ctx = _make_ctx()
         await task.run(ctx)
 
@@ -134,7 +134,7 @@ async def test_http_route_not_found() -> None:
         api = _mock_api(route_items=[])
         mock_cls.return_value = api
 
-        task = CheckPlatformHealthTask("check_platform_health", _PARAMS)
+        task = CheckModelHealthTask("check_model_health",_PARAMS)
         ctx = _make_ctx()
         await task.run(ctx)
 
@@ -149,7 +149,7 @@ async def test_http_route_owner_mismatch() -> None:
         api = _mock_api(route_items=[wrong_owner])
         mock_cls.return_value = api
 
-        task = CheckPlatformHealthTask("check_platform_health", _PARAMS)
+        task = CheckModelHealthTask("check_model_health",_PARAMS)
         ctx = _make_ctx()
         await task.run(ctx)
 
@@ -165,7 +165,7 @@ async def test_uses_label_selectors_scoped_to_model_namespace() -> None:
         api = _mock_api()
         mock_cls.return_value = api
 
-        task = CheckPlatformHealthTask("check_platform_health", _PARAMS)
+        task = CheckModelHealthTask("check_model_health",_PARAMS)
         await task.run(_make_ctx())
 
     trlp_call, route_call = api.list_namespaced_custom_object.call_args_list
@@ -180,7 +180,7 @@ async def test_gateway_defaults_to_confirmed_live_name() -> None:
         api = _mock_api()
         mock_cls.return_value = api
 
-        task = CheckPlatformHealthTask("check_platform_health", _PARAMS)
+        task = CheckModelHealthTask("check_model_health",_PARAMS)
         await task.run(_make_ctx())
 
     gw_call = api.get_namespaced_custom_object.call_args
@@ -193,8 +193,8 @@ async def test_gateway_name_overridable() -> None:
         api = _mock_api()
         mock_cls.return_value = api
 
-        task = CheckPlatformHealthTask(
-            "check_platform_health",
+        task = CheckModelHealthTask(
+            "check_model_health",
             {**_PARAMS, "gateway_name": "custom-gateway", "gateway_namespace": "custom-ns"},
         )
         await task.run(_make_ctx())
