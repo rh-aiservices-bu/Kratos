@@ -20,7 +20,9 @@ push: build
 
 deploy:
 	oc get namespace maaspal >/dev/null 2>&1 || oc new-project maaspal
+	oc label namespace maaspal maas.opendatahub.io/gateway-access=true --overwrite
 	oc apply -k .
+	oc rollout restart deployment/maaspal -n maaspal
 
 dev:
 	@echo "Starting FastAPI dev server on :8000 and Vite dev server on :5173..."

@@ -9,6 +9,7 @@ resources:
   - deploy/rbac-monitoring.yaml
   - deploy/rbac-maas-readonly.yaml
   - deploy/rbac-maas-subscription-write.yaml
+  - deploy/rbac-model-write.yaml
   - deploy/pvc.yaml
   - deploy/configmap-global.yaml
   - deploy/deployment.yaml
@@ -31,3 +32,5 @@ configMapGenerator:
       - scenarios/rate_limit_priority_precedence.yaml
       - scenarios/platform_health_check.yaml
       - scenarios/model_health_check.yaml
+      - scenarios/multi_model_subscription_spread.yaml
+      - scenarios/multi_model_full_load.yaml

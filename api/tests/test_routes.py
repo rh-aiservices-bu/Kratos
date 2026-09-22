@@ -37,13 +37,14 @@ async def client(_temp_db, _mock_k8s):
         yield c
 
 
-async def test_scenarios_returns_nine(client) -> None:
+async def test_scenarios_returns_twelve(client) -> None:
     resp = await client.get("/api/scenarios")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 9
+    assert len(data) == 12
     names = {s["name"] for s in data}
     assert {"single_key_load", "multi_key_load", "direct_inference"} <= names
+    assert {"multi_model_subscription_spread", "multi_model_full_load"} <= names
     assert all("name" in s and "description" in s and "category" in s for s in data)
 
 

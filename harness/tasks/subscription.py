@@ -1,4 +1,5 @@
 import asyncio
+import random
 import time
 import traceback
 
@@ -83,11 +84,35 @@ def _subscription_body(
     model_namespace: str,
     token_limit: int,
     token_window: str,
+    *,
+    model_refs: list[dict] | None = None,
 ) -> dict:
     # Real MaaSSubscription schema (confirmed live, see
     # docs/architecture/maas-domain-reference.md Catalog item A) — there is
     # no top-level `rpsLimit` field; rate limits are per-model, under
     # `modelRefs[].tokenRateLimits[]`.
+    #
+    # model_refs: if provided, each entry is {name, namespace, token_limit?,
+    # token_window?} and is used directly, overriding the single-model params.
+    if model_refs is not None:
+        refs_spec = [
+            {
+                "name": m["name"],
+                "namespace": m["namespace"],
+                "tokenRateLimits": [
+                    {"limit": m.get("token_limit", token_limit), "window": m.get("token_window", token_window)}
+                ],
+            }
+            for m in model_refs
+        ]
+    else:
+        refs_spec = [
+            {
+                "name": model_name,
+                "namespace": model_namespace,
+                "tokenRateLimits": [{"limit": token_limit, "window": token_window}],
+            }
+        ]
     return {
         "apiVersion": f"{_GROUP}/{_VERSION}",
         "kind": "MaaSSubscription",
@@ -98,13 +123,7 @@ def _subscription_body(
                 "groups": [{"name": g} for g in owner_groups],
                 "users": owner_users,
             },
-            "modelRefs": [
-                {
-                    "name": model_name,
-                    "namespace": model_namespace,
-                    "tokenRateLimits": [{"limit": token_limit, "window": token_window}],
-                }
-            ],
+            "modelRefs": refs_spec,
         },
     }
 
@@ -305,5 +324,133 @@ class ApplyPriorityTestSubscriptionsTask(Task):
                 )
 
 
+def _select_models_weighted(models: list[dict], k: int, usage_counts: dict[str, int]) -> list[dict]:
+    """Pick k models from the pool without replacement, weighted toward those
+    with lower usage counts so subscriptions spread evenly across models."""
+    remaining = [(m, 1.0 / (usage_counts.get(m["name"], 0) + 1)) for m in models]
+    selected = []
+    for _ in range(k):
+        total = sum(w for _, w in remaining)
+        r = random.uniform(0, total)
+        cumsum = 0.0
+        for j, (m, w) in enumerate(remaining):
+            cumsum += w
+            if r <= cumsum or j == len(remaining) - 1:
+                selected.append(m)
+                remaining.pop(j)
+                break
+    return selected
+
+
+class ProvisionSubscriptionsDistributedTask(Task):
+    """Creates subscription_count MaaSSubscription CRs distributed randomly
+    across the models in shared_state["deployed_models"]. Each subscription
+    references 1..max_models_per_subscription models (or up to all models when
+    max_models_per_subscription=0). Selection is weighted toward underused
+    models so coverage is roughly even.
+
+    Stores records in shared_state["distributed_subscriptions"] so cleanup
+    can delete each independently. Downstream tasks (provision_keys_distributed)
+    read the same key to pin keys to specific subscriptions.
+    """
+
+    async def run(self, ctx: TaskContext) -> TaskResult:
+        start = time.monotonic()
+        all_models: list[dict] = ctx.shared_state.get("deployed_models", [])
+        if not all_models:
+            raise RuntimeError("provision_subscriptions_distributed requires deployed_models in shared_state — run deploy_simulated_model first")
+        # Only distribute across models that actually became Ready — a
+        # subscription referencing a model with no Ready MaaSModelRef fails
+        # immediately at the controller level.
+        deployed_models = [m for m in all_models if m.get("ready", True)]
+        if not deployed_models:
+            raise RuntimeError("provision_subscriptions_distributed: no deployed models became Ready — cannot create subscriptions")
+        if len(deployed_models) < len(all_models):
+            skipped = [m["name"] for m in all_models if not m.get("ready", True)]
+            print(
+                f"[provision_subscriptions_distributed] skipping {len(skipped)} non-Ready model(s): {skipped}",
+                flush=True,
+            )
+
+        subscription_count = int(self.params.get("subscription_count", 6))
+        name_prefix = str(self.params.get("name_prefix", "maaspal-dist-sub"))
+        namespace = str(self.params.get("namespace", "models-as-a-service"))
+        max_models_per_sub = int(self.params.get("max_models_per_subscription", 0))
+        token_limit = int(self.params.get("token_limit", 1000000))
+        token_window = str(self.params.get("token_window") or _DEFAULT_TOKEN_WINDOW)
+        priority = int(self.params.get("priority", _DEFAULT_PRIORITY))
+        owner_groups = self.params.get("owner_groups") or _DEFAULT_OWNER_GROUPS
+        owner_users = self.params.get("owner_users") or []
+        ready_max_wait_s = float(self.params.get("ready_max_wait_s", _DEFAULT_READY_MAX_WAIT_S))
+
+        cap = min(max_models_per_sub, len(deployed_models)) if max_models_per_sub > 0 else len(deployed_models)
+        usage_counts: dict[str, int] = {m["name"]: 0 for m in deployed_models}
+
+        api = k8s_client.CustomObjectsApi()
+        records = []
+        for i in range(subscription_count):
+            sub_name = f"{name_prefix}-{i + 1}"
+            k = random.randint(1, cap)
+            selected = _select_models_weighted(deployed_models, k, usage_counts)
+            for m in selected:
+                usage_counts[m["name"]] = usage_counts.get(m["name"], 0) + 1
+
+            model_refs = [{"name": m["name"], "namespace": m["namespace"], "token_limit": token_limit, "token_window": token_window} for m in selected]
+            body = _subscription_body(
+                sub_name, namespace, priority, owner_groups, owner_users,
+                "", "", token_limit, token_window,
+                model_refs=model_refs,
+            )
+            existing = _get_existing_subscription(api, sub_name, namespace)
+            _create_or_patch_subscription(api, sub_name, namespace, body, existing)
+            model_summary = ", ".join(m["name"] for m in selected)
+            print(
+                f"[provision_subscriptions_distributed] "
+                f"{'created' if existing is None else 'patched'} {sub_name} "
+                f"models=[{model_summary}]",
+                flush=True,
+            )
+            await _wait_for_subscription_ready(
+                api, sub_name, namespace, ready_max_wait_s, "provision_subscriptions_distributed"
+            )
+            records.append({
+                "name": sub_name,
+                "namespace": namespace,
+                "original": existing,
+                "created": existing is None,
+                "model_refs": model_refs,
+            })
+            ctx.shared_state["task_progress"] = {"current": i + 1, "total": subscription_count}
+            await ctx.emit_assertion_state()
+
+        ctx.shared_state["distributed_subscriptions"] = records
+        return TaskResult(
+            task_name=self.name,
+            status="PASS",
+            duration_ms=(time.monotonic() - start) * 1000,
+        )
+
+    async def cleanup(self, ctx: TaskContext) -> None:
+        records = ctx.shared_state.get("distributed_subscriptions", [])
+        if not records:
+            return
+        api = k8s_client.CustomObjectsApi()
+        for rec in records:
+            try:
+                _cleanup_subscription(api, rec["name"], rec["namespace"], rec["original"], rec["created"])
+                print(
+                    f"[provision_subscriptions_distributed] "
+                    f"{'deleted' if rec['created'] else 'restored'} {rec['name']}",
+                    flush=True,
+                )
+            except Exception:
+                print(
+                    f"[provision_subscriptions_distributed] cleanup FAILED for {rec['name']}\n"
+                    f"{traceback.format_exc()}",
+                    flush=True,
+                )
+
+
 REGISTRY["apply_rate_limit_subscription"] = ApplyRateLimitSubscriptionTask
 REGISTRY["apply_priority_test_subscriptions"] = ApplyPriorityTestSubscriptionsTask
+REGISTRY["provision_subscriptions_distributed"] = ProvisionSubscriptionsDistributedTask

@@ -248,6 +248,108 @@ class VerifyApiKeySearchTask(Task):
         pass
 
 
+class ProvisionKeysDistributedTask(Task):
+    """Creates key_count API keys distributed evenly across the subscriptions
+    in shared_state["distributed_subscriptions"] (set by
+    provision_subscriptions_distributed). Each key is pinned to its
+    subscription via the `subscription` field in the create request.
+
+    All keys are appended to shared_state["api_keys"] so send_requests with
+    key_pool: true distributes requests across the full key pool.
+    """
+
+    async def run(self, ctx: TaskContext) -> TaskResult:
+        start = time.monotonic()
+        subscriptions: list[dict] = ctx.shared_state.get("distributed_subscriptions", [])
+        if not subscriptions:
+            raise RuntimeError("provision_keys_distributed requires distributed_subscriptions in shared_state — run provision_subscriptions_distributed first")
+
+        key_count = int(self.params.get("key_count", 10))
+        key_name_prefix = str(self.params.get("key_name_prefix", "maaspal-dist-key"))
+
+        sub_count = len(subscriptions)
+        keys_per_sub = key_count // sub_count
+        remainder = key_count % sub_count
+
+        checks = ctx.shared_state.setdefault(
+            "key_provision_checks",
+            {
+                "total_keys": 0,
+                "name_echo_match_count": 0,
+                "subscription_checked_count": 0,
+                "subscription_echo_match_count": 0,
+                "expected_subscription_checked_count": 0,
+                "expected_subscription_match_count": 0,
+                "expires_at_present_count": 0,
+            },
+        )
+
+        url = f"{ctx.maas_api_url}/maas-api/v1/api-keys"
+        global_key_index = 0
+        async with httpx.AsyncClient() as client:
+            for sub_idx, sub in enumerate(subscriptions):
+                sub_name = sub["name"]
+                count_for_sub = keys_per_sub + (1 if sub_idx < remainder else 0)
+                for j in range(count_for_sub):
+                    global_key_index += 1
+                    name_i = f"{key_name_prefix}-{global_key_index}"
+                    body = {"name": name_i, "subscription": sub_name}
+                    print(
+                        f"[provision_keys_distributed] POST {url} "
+                        f"body={body!r} "
+                        f"(token={_redact(ctx.sa_token)})",
+                        flush=True,
+                    )
+                    resp = await client.post(
+                        url,
+                        json=body,
+                        headers={"Authorization": f"Bearer {ctx.sa_token}"},
+                    )
+                    if not resp.is_success:
+                        print(
+                            f"[provision_keys_distributed] POST {url} → {resp.status_code}: {resp.text}",
+                            flush=True,
+                        )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    print(
+                        f"[provision_keys_distributed] created key id={data.get('id')} "
+                        f"name={data.get('name')} subscription={sub_name}",
+                        flush=True,
+                    )
+                    ctx.shared_state.setdefault("api_keys", []).append(
+                        {
+                            "id": data["id"],
+                            "key": data["key"],
+                            "name": data.get("name"),
+                            "subscription": data.get("subscription"),
+                            "expiresAt": data.get("expiresAt"),
+                        }
+                    )
+
+                    checks["total_keys"] += 1
+                    if data.get("name") == name_i:
+                        checks["name_echo_match_count"] += 1
+                    checks["subscription_checked_count"] += 1
+                    if data.get("subscription") == sub_name:
+                        checks["subscription_echo_match_count"] += 1
+                    if data.get("expiresAt"):
+                        checks["expires_at_present_count"] += 1
+
+                    ctx.shared_state["task_progress"] = {"current": global_key_index, "total": key_count}
+                    await ctx.emit_assertion_state()
+
+        return TaskResult(
+            task_name=self.name,
+            status="PASS",
+            duration_ms=(time.monotonic() - start) * 1000,
+        )
+
+    async def cleanup(self, ctx: TaskContext) -> None:
+        await _revoke_keys(ctx)
+
+
 REGISTRY["provision_api_key"] = ProvisionApiKeyTask
 REGISTRY["revoke_api_keys"] = RevokeApiKeysTask
 REGISTRY["verify_api_key_search"] = VerifyApiKeySearchTask
+REGISTRY["provision_keys_distributed"] = ProvisionKeysDistributedTask
