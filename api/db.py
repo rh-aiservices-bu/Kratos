@@ -22,7 +22,10 @@ async def init_db() -> None:
                 created_at       TEXT NOT NULL,
                 updated_at       TEXT NOT NULL,
                 config_overrides TEXT,
-                duration_ms      REAL
+                duration_ms      REAL,
+                auto_cleanup     INTEGER NOT NULL DEFAULT 1,
+                cleanup_status   TEXT NOT NULL DEFAULT 'pending',
+                cleanup_error    TEXT
             )
             """
         )
@@ -32,6 +35,13 @@ async def init_db() -> None:
         # Migration: add duration_ms column to existing databases
         with contextlib.suppress(Exception):
             await db.execute("ALTER TABLE runs ADD COLUMN duration_ms REAL")
+        # Migration: add auto-cleanup toggle/status columns to existing databases
+        with contextlib.suppress(Exception):
+            await db.execute("ALTER TABLE runs ADD COLUMN auto_cleanup INTEGER NOT NULL DEFAULT 1")
+        with contextlib.suppress(Exception):
+            await db.execute("ALTER TABLE runs ADD COLUMN cleanup_status TEXT NOT NULL DEFAULT 'pending'")
+        with contextlib.suppress(Exception):
+            await db.execute("ALTER TABLE runs ADD COLUMN cleanup_error TEXT")
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS task_results (

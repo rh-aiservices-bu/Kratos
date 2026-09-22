@@ -91,6 +91,11 @@ def _redact_sensitive_config(value):
         return [_redact_sensitive_config(v) for v in value]
     return value
 
+from harness.cleanup_state import (
+    read_auto_cleanup_flag,
+    write_cleanup_state,
+    write_cleanup_status,
+)
 from harness.config import load_scenario
 from harness.metrics_client import fetch_metrics
 from harness.result import (
@@ -583,15 +588,30 @@ class ScenarioRunner:
                 run_failed = True
                 break
 
-        for task in reversed(tasks):
-            print(f"[runner] cleanup: {task.name}", flush=True)
-            try:
-                await task.cleanup(ctx)
-            except Exception:
-                print(
-                    f"[runner] cleanup FAILED: {task.name}\n{traceback.format_exc()}",
-                    flush=True,
-                )
+        # Persisted unconditionally (regardless of the toggle below) so a later
+        # manual "Clean Up Now" — run by the API server, after this process has
+        # already exited — has whatever each task's cleanup() needs (created key
+        # IDs, original subscription/auth-policy CR bodies, ...). None of that
+        # otherwise survives past this process's lifetime.
+        write_cleanup_state(_RESULTS_DIR, self.run_id, shared_state)
+
+        if read_auto_cleanup_flag(_RESULTS_DIR, self.run_id):
+            write_cleanup_status(_RESULTS_DIR, self.run_id, "cleaning")
+            cleanup_failed = False
+            for task in reversed(tasks):
+                print(f"[runner] cleanup: {task.name}", flush=True)
+                try:
+                    await task.cleanup(ctx)
+                except Exception:
+                    cleanup_failed = True
+                    print(
+                        f"[runner] cleanup FAILED: {task.name}\n{traceback.format_exc()}",
+                        flush=True,
+                    )
+            write_cleanup_status(_RESULTS_DIR, self.run_id, "failed" if cleanup_failed else "done")
+        else:
+            print("[runner] auto-cleanup disabled — skipping task cleanup", flush=True)
+            write_cleanup_status(_RESULTS_DIR, self.run_id, "skipped")
 
         # Stop the background metrics poller, then let the scenario's top-level
         # assertions settle the same way per-task ones do (_settle_and_evaluate).

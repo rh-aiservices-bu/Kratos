@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Modal } from '@patternfly/react-core';
+import { Button, Modal, Switch } from '@patternfly/react-core';
 import {
   createRun,
   getMaasModels,
@@ -64,6 +64,7 @@ const noteStyle = { color: '#888', fontSize: '0.75rem', margin: '0.25rem 0 0' };
 export function RunTrigger({ scenario, onConfirm, onCancel }: Props) {
   const [loading, setLoading] = useState(false);
   const [values, setValues] = useState<ConfigValues>(() => initValues(scenario.config));
+  const [autoCleanup, setAutoCleanup] = useState(true);
 
   const needsModelPicker =
     _MODEL_NAME_KEY in scenario.config && _MODEL_NAMESPACE_KEY in scenario.config;
@@ -138,7 +139,7 @@ export function RunTrigger({ scenario, onConfirm, onCancel }: Props) {
   async function handleConfirm() {
     setLoading(true);
     try {
-      const result = await createRun(scenario.name, values);
+      const result = await createRun(scenario.name, values, autoCleanup);
       onConfirm(result.run_id);
     } finally {
       setLoading(false);
@@ -207,9 +208,21 @@ export function RunTrigger({ scenario, onConfirm, onCancel }: Props) {
         </Button>,
       ]}
     >
-      <p style={{ color: '#555', marginBottom: hasConfig ? '1.25rem' : 0 }}>
-        {scenario.description}
-      </p>
+      <p style={{ color: '#555', marginBottom: '1rem' }}>{scenario.description}</p>
+
+      <div className="maaspal-config-form__field" style={{ marginBottom: hasConfig ? '1.25rem' : 0 }}>
+        <Switch
+          id="cfg-auto-cleanup"
+          label="Auto cleanup"
+          isChecked={autoCleanup}
+          onChange={(_e, checked) => setAutoCleanup(checked)}
+        />
+        <p style={noteStyle}>
+          Automatically revoke API keys and restore/delete any subscriptions this run creates.
+          Turn off to inspect what a run leaves behind — you can turn it back on mid-run, or clean
+          up manually afterward from the run's detail page.
+        </p>
+      </div>
 
       {hasConfig && (
         <>

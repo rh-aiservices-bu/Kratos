@@ -7,6 +7,8 @@ export interface Scenario {
   category: string;
 }
 
+export type CleanupStatus = 'pending' | 'cleaning' | 'skipped' | 'done' | 'failed';
+
 export interface Run {
   id: string;
   scenario: string;
@@ -14,6 +16,9 @@ export interface Run {
   created_at: string;
   updated_at: string;
   duration_ms?: number | null;
+  auto_cleanup: boolean;
+  cleanup_status: CleanupStatus;
+  cleanup_error?: string | null;
 }
 
 export interface AssertionState {
@@ -40,14 +45,31 @@ export async function listScenarios(): Promise<Scenario[]> {
 export async function createRun(
   scenario: string,
   config_overrides: Record<string, string | number> = {},
+  auto_cleanup = true,
 ): Promise<CreateRunResponse> {
   const r = await fetch('/api/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scenario, config_overrides }),
+    body: JSON.stringify({ scenario, config_overrides, auto_cleanup }),
   });
   if (!r.ok) throw new Error(`createRun failed: ${r.status}`);
   return r.json() as Promise<CreateRunResponse>;
+}
+
+export async function setAutoCleanup(runId: string, enabled: boolean): Promise<{ auto_cleanup: boolean }> {
+  const r = await fetch(`/api/runs/${runId}/auto-cleanup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!r.ok) throw new Error(`setAutoCleanup failed: ${r.status}`);
+  return r.json() as Promise<{ auto_cleanup: boolean }>;
+}
+
+export async function cleanupRun(runId: string): Promise<{ cleanup_status: CleanupStatus }> {
+  const r = await fetch(`/api/runs/${runId}/cleanup`, { method: 'POST' });
+  if (!r.ok) throw new Error(`cleanupRun failed: ${r.status}`);
+  return r.json() as Promise<{ cleanup_status: CleanupStatus }>;
 }
 
 export async function listRuns(): Promise<Run[]> {

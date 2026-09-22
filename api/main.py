@@ -17,6 +17,7 @@ from api.routes.maas import router as maas_router
 from api.routes.progress import router as progress_router
 from api.routes.runs import router as runs_router
 from api.routes.scenarios import router as scenarios_router
+from harness.cleanup_state import read_cleanup_status
 
 _RESULTS_DIR = Path("/data/results")
 _POLL_INTERVAL_S = 10
@@ -44,13 +45,33 @@ async def _sync_completed_runs() -> None:
             status = "FAIL"
             duration_ms = None
 
+        # By the time {run_id}.json exists, harness/runner.py has already made
+        # its cleanup decision and written {run_id}-cleanup-status.json — no
+        # separate poll cadence needed, this file is guaranteed final here. A
+        # run whose harness predates this feature (no status file ever
+        # written) defaults to "done", matching that era's unconditional
+        # cleanup rather than showing a stale "Clean Up Now" prompt.
+        cleanup_info = read_cleanup_status(_RESULTS_DIR, run_id)
+        cleanup_status = cleanup_info.get("status", "pending")
+        if not result_path.with_name(f"{run_id}-cleanup-status.json").exists():
+            cleanup_status = "done"
+        cleanup_error = cleanup_info.get("error")
+
         async with aiosqlite.connect(get_db_path()) as db:
             await db.execute(
-                "UPDATE runs SET status=?, updated_at=?, duration_ms=? WHERE id=?",
-                (status, datetime.now(timezone.utc).isoformat(), duration_ms, run_id),
+                "UPDATE runs SET status=?, updated_at=?, duration_ms=?, cleanup_status=?, cleanup_error=? "
+                "WHERE id=?",
+                (
+                    status,
+                    datetime.now(timezone.utc).isoformat(),
+                    duration_ms,
+                    cleanup_status,
+                    cleanup_error,
+                    run_id,
+                ),
             )
             await db.commit()
-        print(f"[api] run {run_id} → {status}", flush=True)
+        print(f"[api] run {run_id} → {status} (cleanup: {cleanup_status})", flush=True)
 
 
 async def _poll_job_statuses() -> None:

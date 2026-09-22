@@ -1037,3 +1037,122 @@ def test_config_snapshot_excludes_incidental_environment_noise(
     assert "SOME_UNRELATED_ENV_VAR" not in config
     assert "PATH" not in config
     assert "PATH" not in config
+
+
+def test_auto_cleanup_flag_false_skips_cleanup_and_writes_skipped_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harness import cleanup_state, runner as runner_module
+
+    monkeypatch.setattr(runner_module, "_RESULTS_DIR", tmp_path)
+    run_id = "auto-cleanup-off-001"
+    cleanup_state.write_auto_cleanup_flag(tmp_path, run_id, False)
+
+    cleaned: list[str] = []
+
+    class _Tracked(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            ctx.shared_state["api_keys"] = [{"id": "k1"}]
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            cleaned.append(self.name)
+
+    REGISTRY["_ac_tracked"] = _Tracked
+    try:
+        path = _write(tmp_path, """
+            name: test_auto_cleanup_off
+            config: {}
+            tasks:
+              - name: _ac_tracked
+                params: {}
+            assertions: {}
+        """)
+        result = asyncio.run(ScenarioRunner(path, run_id).run())
+        assert result.status == "PASS"
+        assert cleaned == [], "cleanup() must not run when the flag is off"
+
+        status = json.loads((tmp_path / f"{run_id}-cleanup-status.json").read_text())
+        assert status["status"] == "skipped"
+
+        # shared_state must still be persisted so a later manual cleanup has
+        # what it needs, even though automatic cleanup was skipped.
+        state = json.loads((tmp_path / f"{run_id}-cleanup-state.json").read_text())
+        assert state["api_keys"] == [{"id": "k1"}]
+    finally:
+        REGISTRY.pop("_ac_tracked", None)
+
+
+def test_auto_cleanup_flag_missing_defaults_true_and_runs_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No flag file at all (e.g. a run predating this feature) must behave
+    exactly like today's unconditional cleanup, not silently skip it."""
+    from harness import runner as runner_module
+
+    monkeypatch.setattr(runner_module, "_RESULTS_DIR", tmp_path)
+    run_id = "auto-cleanup-default-001"
+
+    cleaned: list[str] = []
+
+    class _Tracked(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            cleaned.append(self.name)
+
+    REGISTRY["_ac_default"] = _Tracked
+    try:
+        path = _write(tmp_path, """
+            name: test_auto_cleanup_default
+            config: {}
+            tasks:
+              - name: _ac_default
+                params: {}
+            assertions: {}
+        """)
+        result = asyncio.run(ScenarioRunner(path, run_id).run())
+        assert result.status == "PASS"
+        assert cleaned == ["_ac_default"]
+
+        status = json.loads((tmp_path / f"{run_id}-cleanup-status.json").read_text())
+        assert status["status"] == "done"
+    finally:
+        REGISTRY.pop("_ac_default", None)
+
+
+def test_auto_cleanup_task_failure_writes_failed_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harness import runner as runner_module
+
+    monkeypatch.setattr(runner_module, "_RESULTS_DIR", tmp_path)
+    run_id = "auto-cleanup-fail-001"
+
+    class _BrokenCleanup(Task):
+        async def run(self, ctx: TaskContext) -> TaskResult:
+            return TaskResult(task_name=self.name, status="PASS", duration_ms=0)
+
+        async def cleanup(self, ctx: TaskContext) -> None:
+            raise RuntimeError("cleanup exploded")
+
+    REGISTRY["_ac_broken"] = _BrokenCleanup
+    try:
+        path = _write(tmp_path, """
+            name: test_auto_cleanup_fail
+            config: {}
+            tasks:
+              - name: _ac_broken
+                params: {}
+            assertions: {}
+        """)
+        result = asyncio.run(ScenarioRunner(path, run_id).run())
+        # A cleanup failure is logged, not fatal to the run's own PASS/FAIL status
+        # (matches the pre-existing unconditional-cleanup behavior).
+        assert result.status == "PASS"
+
+        status = json.loads((tmp_path / f"{run_id}-cleanup-status.json").read_text())
+        assert status["status"] == "failed"
+    finally:
+        REGISTRY.pop("_ac_broken", None)

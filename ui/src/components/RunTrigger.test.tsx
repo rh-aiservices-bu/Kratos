@@ -255,3 +255,37 @@ test('picking an incompatible model clears a subscription pin the fetched models
   fireEvent.change(modelSelect, { target: { value: 'llm/model-a' } });
   await waitFor(() => expect(subSelect.value).toBe(''));
 });
+
+test('auto cleanup defaults on and is sent with the launch request', async () => {
+  mockFetch();
+
+  await act(async () => {
+    render(<RunTrigger scenario={plainScenario} onConfirm={jest.fn()} onCancel={jest.fn()} />);
+  });
+
+  const toggle = screen.getByLabelText('Auto cleanup') as HTMLInputElement;
+  expect(toggle.checked).toBe(true);
+
+  fireEvent.click(screen.getByRole('button', { name: /launch run/i }));
+
+  await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/runs', expect.anything()));
+  const [, init] = (global.fetch as jest.Mock).mock.calls.find(([url]) => url === '/api/runs')!;
+  const body = JSON.parse(init.body as string);
+  expect(body.auto_cleanup).toBe(true);
+});
+
+test('unchecking auto cleanup sends auto_cleanup: false', async () => {
+  mockFetch();
+
+  await act(async () => {
+    render(<RunTrigger scenario={plainScenario} onConfirm={jest.fn()} onCancel={jest.fn()} />);
+  });
+
+  fireEvent.click(screen.getByLabelText('Auto cleanup'));
+  fireEvent.click(screen.getByRole('button', { name: /launch run/i }));
+
+  await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/runs', expect.anything()));
+  const [, init] = (global.fetch as jest.Mock).mock.calls.find(([url]) => url === '/api/runs')!;
+  const body = JSON.parse(init.body as string);
+  expect(body.auto_cleanup).toBe(false);
+});

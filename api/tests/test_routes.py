@@ -189,3 +189,136 @@ async def test_get_run_config_returns_yaml(client, tmp_path, monkeypatch) -> Non
     yaml_text = resp.json()["config_yaml"]
     assert "request_count: 5" in yaml_text
     assert "***REDACTED***" in yaml_text
+
+
+async def test_create_run_defaults_auto_cleanup_true(client, tmp_path, monkeypatch) -> None:
+    import api.routes.runs
+
+    monkeypatch.setattr(api.routes.runs, "_RESULTS_DIR", tmp_path)
+
+    r = await client.post("/api/runs", json={"scenario": "single_key_load"})
+    run_id = r.json()["run_id"]
+
+    get_resp = await client.get(f"/api/runs/{run_id}")
+    assert get_resp.json()["auto_cleanup"] is True
+
+    flag = json.loads((tmp_path / f"{run_id}-cleanup-flag.json").read_text())
+    assert flag["auto_cleanup"] is True
+
+
+async def test_create_run_respects_auto_cleanup_false(client, tmp_path, monkeypatch) -> None:
+    import api.routes.runs
+
+    monkeypatch.setattr(api.routes.runs, "_RESULTS_DIR", tmp_path)
+
+    r = await client.post(
+        "/api/runs", json={"scenario": "single_key_load", "auto_cleanup": False}
+    )
+    run_id = r.json()["run_id"]
+
+    get_resp = await client.get(f"/api/runs/{run_id}")
+    assert get_resp.json()["auto_cleanup"] is False
+
+    flag = json.loads((tmp_path / f"{run_id}-cleanup-flag.json").read_text())
+    assert flag["auto_cleanup"] is False
+
+
+async def test_set_auto_cleanup_toggle_while_active(client, tmp_path, monkeypatch) -> None:
+    import api.routes.runs
+
+    monkeypatch.setattr(api.routes.runs, "_RESULTS_DIR", tmp_path)
+
+    r = await client.post("/api/runs", json={"scenario": "single_key_load"})
+    run_id = r.json()["run_id"]
+
+    resp = await client.post(f"/api/runs/{run_id}/auto-cleanup", json={"enabled": False})
+    assert resp.status_code == 200
+    assert resp.json() == {"auto_cleanup": False}
+
+    get_resp = await client.get(f"/api/runs/{run_id}")
+    assert get_resp.json()["auto_cleanup"] is False
+
+    flag = json.loads((tmp_path / f"{run_id}-cleanup-flag.json").read_text())
+    assert flag["auto_cleanup"] is False
+
+
+async def test_set_auto_cleanup_404_unknown_run(client) -> None:
+    resp = await client.post("/api/runs/does-not-exist/auto-cleanup", json={"enabled": False})
+    assert resp.status_code == 404
+
+
+async def test_set_auto_cleanup_409_once_terminal(client) -> None:
+    from api.db import get_db_path
+
+    r = await client.post("/api/runs", json={"scenario": "single_key_load"})
+    run_id = r.json()["run_id"]
+
+    async with aiosqlite.connect(get_db_path()) as db:
+        await db.execute("UPDATE runs SET status='PASS' WHERE id=?", (run_id,))
+        await db.commit()
+
+    resp = await client.post(f"/api/runs/{run_id}/auto-cleanup", json={"enabled": True})
+    assert resp.status_code == 409
+
+
+async def test_cleanup_now_404_unknown_run(client) -> None:
+    resp = await client.post("/api/runs/does-not-exist/cleanup")
+    assert resp.status_code == 404
+
+
+async def test_cleanup_now_409_while_active(client) -> None:
+    r = await client.post("/api/runs", json={"scenario": "single_key_load"})
+    run_id = r.json()["run_id"]
+
+    resp = await client.post(f"/api/runs/{run_id}/cleanup")
+    assert resp.status_code == 409
+
+
+async def test_cleanup_now_409_when_already_done(client) -> None:
+    from api.db import get_db_path
+
+    r = await client.post("/api/runs", json={"scenario": "single_key_load"})
+    run_id = r.json()["run_id"]
+
+    async with aiosqlite.connect(get_db_path()) as db:
+        await db.execute(
+            "UPDATE runs SET status='PASS', cleanup_status='done' WHERE id=?", (run_id,)
+        )
+        await db.commit()
+
+    resp = await client.post(f"/api/runs/{run_id}/cleanup")
+    assert resp.status_code == 409
+
+
+async def test_cleanup_now_starts_when_skipped(client, monkeypatch) -> None:
+    import api.routes.runs
+    from api.db import get_db_path
+
+    started: list[str] = []
+
+    async def _fake_manual_cleanup(run_id: str) -> None:
+        started.append(run_id)
+
+    monkeypatch.setattr(api.routes.runs, "run_manual_cleanup", _fake_manual_cleanup)
+
+    r = await client.post("/api/runs", json={"scenario": "single_key_load"})
+    run_id = r.json()["run_id"]
+
+    async with aiosqlite.connect(get_db_path()) as db:
+        await db.execute(
+            "UPDATE runs SET status='FAIL', cleanup_status='skipped' WHERE id=?", (run_id,)
+        )
+        await db.commit()
+
+    resp = await client.post(f"/api/runs/{run_id}/cleanup")
+    assert resp.status_code == 200
+    assert resp.json() == {"cleanup_status": "cleaning"}
+
+    get_resp = await client.get(f"/api/runs/{run_id}")
+    assert get_resp.json()["cleanup_status"] == "cleaning"
+
+    # Let the fire-and-forget asyncio task actually run.
+    import asyncio
+
+    await asyncio.sleep(0)
+    assert started == [run_id]

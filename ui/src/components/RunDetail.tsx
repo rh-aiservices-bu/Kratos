@@ -1,12 +1,14 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { Button, Grid, GridItem, Page, PageSection, Spinner } from '@patternfly/react-core';
+import { Button, Grid, GridItem, Page, PageSection, Spinner, Switch, Tooltip } from '@patternfly/react-core';
 import { AssertionPanel } from './AssertionPanel';
 import { LogStream } from './LogStream';
 import { TaskProgress } from './TaskProgress';
 import {
+  cleanupRun,
   getAssertions,
   getProgress,
   getRun,
+  setAutoCleanup,
   stopRun,
   type AssertionState,
   type Run,
@@ -66,6 +68,7 @@ export function RunDetail({ runId, onBack }: Props) {
   const [taskProgress, setTaskProgress] = useState<TaskProgressEntry[]>([]);
   const [runStartedAt, setRunStartedAt] = useState<string | undefined>(undefined);
   const [stopping, setStopping] = useState(false);
+  const [cleaningUp, setCleaningUp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [, setTick] = useState(0);
 
@@ -129,6 +132,28 @@ export function RunDetail({ runId, onBack }: Props) {
     }
   }
 
+  async function handleAutoCleanupToggle(enabled: boolean) {
+    setRun((prev) => (prev ? { ...prev, auto_cleanup: enabled } : prev)); // optimistic
+    try {
+      await setAutoCleanup(runId, enabled);
+    } catch (err) {
+      console.error(err);
+      getRun(runId).then(setRun).catch(() => {}); // reconcile on failure
+    }
+  }
+
+  async function handleCleanupNow() {
+    setCleaningUp(true);
+    try {
+      await cleanupRun(runId);
+      getRun(runId).then(setRun).catch(() => {});
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setCleaningUp(false);
+    }
+  }
+
   return (
     <Page>
       <PageSection>
@@ -172,6 +197,29 @@ export function RunDetail({ runId, onBack }: Props) {
               <Button variant="link" isInline onClick={() => setShowSettings(true)}>
                 View Settings
               </Button>
+              {(() => {
+                const isActive = ACTIVE_STATUSES.has(run.status.toUpperCase());
+                const switchEl = (
+                  <Switch
+                    id="run-auto-cleanup"
+                    label="Auto cleanup"
+                    isChecked={run.auto_cleanup}
+                    isDisabled={!isActive}
+                    onChange={(_e, checked) => void handleAutoCleanupToggle(checked)}
+                  />
+                );
+                return (
+                  <span className="maaspal-run-detail-meta__item">
+                    {isActive ? (
+                      switchEl
+                    ) : (
+                      <Tooltip content="Auto cleanup can only be changed while a run is active">
+                        <span>{switchEl}</span>
+                      </Tooltip>
+                    )}
+                  </span>
+                );
+              })()}
               {ACTIVE_STATUSES.has(run.status.toUpperCase()) && (
                 <Button
                   variant="danger"
@@ -183,6 +231,30 @@ export function RunDetail({ runId, onBack }: Props) {
                   Stop
                 </Button>
               )}
+              {!ACTIVE_STATUSES.has(run.status.toUpperCase()) && run.cleanup_status === 'cleaning' && (
+                <span className="maaspal-run-detail-meta__item">
+                  <Spinner size="sm" aria-label="Cleaning up" /> Cleaning up…
+                </span>
+              )}
+              {!ACTIVE_STATUSES.has(run.status.toUpperCase()) &&
+                (run.cleanup_status === 'skipped' || run.cleanup_status === 'failed') && (
+                  <span className="maaspal-run-detail-meta__item">
+                    <Button
+                      variant="secondary"
+                      isInline
+                      isLoading={cleaningUp}
+                      isDisabled={cleaningUp}
+                      onClick={() => void handleCleanupNow()}
+                    >
+                      Clean Up Now
+                    </Button>
+                    {run.cleanup_status === 'failed' && run.cleanup_error && (
+                      <Tooltip content={run.cleanup_error}>
+                        <span style={{ color: '#c62828', marginLeft: '0.4rem' }}>cleanup failed ⓘ</span>
+                      </Tooltip>
+                    )}
+                  </span>
+                )}
             </div>
           ) : (
             <Spinner size="sm" aria-label="Loading run" />
