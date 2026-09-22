@@ -335,6 +335,47 @@ async def test_url_resolution_sa_token_fallback(httpx_mock) -> None:
     )
 
 
+async def test_url_resolution_matches_by_owned_by(httpx_mock) -> None:
+    """Confirmed live: a scenario's own target_model_namespace/target_model_name
+    (e.g. "llm/facebook-opt-125m-simulated") matches neither a model's `id`
+    nor its `displayName` — only `owned_by` ("<namespace>/<name>") is a
+    reliable match for what a scenario actually knows. Regression test for a
+    live incident: an unrelated second model sorting first in the discovery
+    response silently hijacked a scenario that had a target configured but
+    never matched anything, falling through to "first available"."""
+    httpx_mock.add_response(
+        url="http://maas.test/v1/models",
+        json={
+            "data": [
+                {
+                    "id": "some-other-model-external",
+                    "owned_by": "llm/some-other-model-external",
+                    "url": "http://wrong-model.test",
+                },
+                {
+                    "id": "publishers/llm/models/facebook/opt-125m",
+                    "owned_by": "llm/facebook-opt-125m-simulated",
+                    "modelDetails": {"displayName": "Facebook OPT 125M (Simulated)"},
+                    "url": "http://right-model.test",
+                },
+            ]
+        },
+    )
+
+    with patch("harness.tasks.inference.AsyncOpenAI") as mock_cls:
+        mock_cls.return_value = _mock_client()
+
+        task = SendRequestsTask(
+            "send_requests", {"count": "1", "model": "llm/facebook-opt-125m-simulated"}
+        )
+        ctx = _make_ctx()
+        await task.run(ctx)
+
+    mock_cls.assert_called_with(
+        api_key="test-token", base_url="http://right-model.test/v1"
+    )
+
+
 def test_distribute_evenly() -> None:
     assert _distribute(6, 3) == [2, 2, 2]
     assert _distribute(5, 5) == [1, 1, 1, 1, 1]

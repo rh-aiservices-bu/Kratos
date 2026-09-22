@@ -46,6 +46,9 @@ tasks:
         expect: "== ${config.key_count}"
   - name: send_requests
     params:
+      # See rate_limit_validation.yaml for why this is required, not just
+      # nice-to-have, once more than one model is registered on the cluster.
+      model: "${config.target_model_namespace}/${config.target_model_name}"
       count: "${config.request_count}"
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"

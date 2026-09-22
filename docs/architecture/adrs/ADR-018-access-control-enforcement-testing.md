@@ -46,3 +46,20 @@ The interesting decision is: how to test the "quota without gateway access fails
 
 **Neutral:**
 - `docs/architecture/empirical-verification-checklist.md` is a new living doc (same spirit as `maas-domain-reference.md`) cataloging every other empirical-verification gap found during this work, so future sessions have a backlog instead of re-deriving the list.
+
+## Update: the load-bearing assumption was wrong — `subscription:` doesn't override caller eligibility
+
+Run live for the first time, `access_denied_no_policy` fails at `provision_api_key` itself: `400 {"code":"invalid_subscription","error":"Unable to resolve a subscription for this API key"}` — it never reaches the actual fail-closed check. Confirmed via a direct `TokenReview` against the harness SA's own token:
+
+```
+username: system:serviceaccount:kratos:kratos
+groups: [system:serviceaccounts, system:serviceaccounts:kratos, system:authenticated]
+```
+
+`kratos-fail-closed-test` (the scenario's synthetic `owner_groups` value) appears nowhere. This confirms the "load-bearing assumption" flagged above was wrong: `provision_api_key`'s `subscription` param does **not** force-bind a key to an arbitrary named subscription regardless of the caller's real identity — it only *disambiguates among subscriptions the caller is already eligible for*. Naming a subscription whose owner the caller doesn't actually belong to is correctly rejected, not honored. In hindsight this is the only sane behavior for an access-control system — the surprising part is only that this ADR assumed otherwise without checking, exactly the ADR-009 pattern repeating a third time in this codebase's history now (see ADR-009's own three Updates).
+
+**A second, independent problem, uncovered while investigating the first**: even a group the caller *does* belong to doesn't work here. `system:authenticated` already has a real `MaaSAuthPolicy` (`simulator-access`) covering this exact model — so pinning to a `system:authenticated`-owned subscription would make the request *succeed*, not fail closed, defeating the scenario's premise before it even gets to the auth-denial question.
+
+**Path to an actual fix, not yet built**: both problems are solved by the same mechanism already designed for `empirical-verification-checklist.md`'s "Next Up" §2/§5 — mint a throwaway ServiceAccount via the Kubernetes TokenRequest API, and bind the subscription's `spec.owner.users` directly to that SA's fully-qualified username (`system:serviceaccount:kratos:<name>`), not a group. This is a direct username match, not the (also now-suspect, see the checklist's §1 note) Group-membership-based path — the minted identity is guaranteed to be quota'd (its own dedicated subscription) and guaranteed to have no matching auth policy (nothing else on the cluster could possibly reference a name that only this run generates). Needs `provision_api_key` to accept a `token` override so the key gets minted *as* that identity, not the harness's own SA — the same requirement already identified for checklist items #2 and #5, now with a fourth, more urgent reason to build it: this scenario cannot work at all without it, not just "could be improved by" it.
+
+**Until that's built, this scenario cannot pass as designed** — the checklist's "Access-control enforcement" row for this claim has been reverted from Verified back to Gap.

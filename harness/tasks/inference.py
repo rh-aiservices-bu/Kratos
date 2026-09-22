@@ -171,8 +171,18 @@ class SendRequestsTask(Task):
     async def _discover_model(self, ctx: TaskContext, want: str) -> tuple[str, str]:
         """Return (base_url, model_id) by querying /v1/models.
 
-        Matches want against m['id'] or m['modelDetails']['displayName'].
-        Falls through to first available if no match.
+        Matches want against m['id'], m['modelDetails']['displayName'], or
+        m['owned_by'] ("<namespace>/<MaaSModelRef name>", confirmed live).
+        `owned_by` is the one field that reliably matches a scenario's own
+        `target_model_namespace`/`target_model_name` config — `id` and
+        `displayName` are cosmetic/internal and don't need to (and, confirmed
+        live, may not) resemble the CR name at all. Falls through to first
+        available only if none of the three match, and that fallback is
+        genuinely risky once more than one model is registered (confirmed
+        live: an unrelated ExternalModel sorting first in the list silently
+        hijacked a scenario that had a target model configured but never
+        wired it through to this match) — always pass `model:` explicitly for
+        any scenario that cares which model it hits, don't rely on this.
         The returned model_id is always the canonical m['id'] from the discovery
         response, not the want string — ensures the inference call uses the ID
         the endpoint actually recognises.
@@ -200,11 +210,12 @@ class SendRequestsTask(Task):
 
         for m in data.get("data", []):
             display = (m.get("modelDetails") or {}).get("displayName", "")
-            if m["id"] == want or display == want:
+            owned_by = m.get("owned_by", "")
+            if m["id"] == want or display == want or owned_by == want:
                 base = _base(m["url"])
                 print(
                     f"[send_requests] matched model id={m['id']} display={display!r} "
-                    f"base_url={base}",
+                    f"owned_by={owned_by!r} base_url={base}",
                     flush=True,
                 )
                 return base, m["id"]

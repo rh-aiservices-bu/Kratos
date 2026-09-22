@@ -44,6 +44,14 @@ tasks:
         expect: "== ${config.key_count}"
   - name: send_requests
     params:
+      # Confirmed live: /v1/models can return more than one model (an
+      # unrelated ExternalModel silently hijacked this scenario once by
+      # sorting first in the discovery response) — always pin the exact
+      # model this scenario's subscription targets, don't rely on
+      # DEFAULT_MODEL/first-available. Matches m['owned_by'] ("<namespace>/
+      # <name>"), the one discovery field that's a reliable match for these
+      # two config values regardless of id/displayName formatting.
+      model: "${config.target_model_namespace}/${config.target_model_name}"
       count: "${config.request_count}"
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"

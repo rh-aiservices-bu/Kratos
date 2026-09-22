@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from kubernetes.client.exceptions import ApiException
@@ -7,6 +7,7 @@ from harness.tasks.base import TaskContext
 from harness.tasks.subscription import (
     ApplyPriorityTestSubscriptionsTask,
     ApplyRateLimitSubscriptionTask,
+    _wait_for_subscription_ready,
 )
 
 _PARAMS = {
@@ -15,6 +16,11 @@ _PARAMS = {
     "model_name": "facebook-opt-125m-simulated",
     "model_namespace": "llm",
     "token_limit": "10",
+    # 0 makes _wait_for_subscription_ready give up after exactly one check
+    # instead of actually polling for up to the real 30s default — these
+    # tests aren't exercising that wait loop itself (see the dedicated
+    # test_wait_for_subscription_ready_* tests below for that).
+    "ready_max_wait_s": "0",
 }
 
 
@@ -191,6 +197,7 @@ _PRIORITY_PARAMS = {
     "namespace": "models-as-a-service",
     "model_name": "facebook-opt-125m-simulated",
     "model_namespace": "llm",
+    "ready_max_wait_s": "0",
     "subscriptions": [
         {"name": "kratos-priority-low", "priority": 50, "token_limit": 10},
         {"name": "kratos-priority-high", "priority": 200, "token_limit": 1000000},
@@ -232,7 +239,12 @@ async def test_priority_subscriptions_independent_per_record_state() -> None:
     with patch("harness.tasks.subscription.k8s_client.CustomObjectsApi") as mock_cls:
         api = MagicMock()
         mock_cls.return_value = api
-        api.get_namespaced_custom_object.side_effect = [existing_low, _api_exc(404)]
+        # Each subscription now does an initial existence check *and* one
+        # ready-poll check (ready_max_wait_s=0 caps it at exactly one) —
+        # call order is per-subscription (initial, ready) not batched.
+        api.get_namespaced_custom_object.side_effect = [
+            existing_low, existing_low, _api_exc(404), _api_exc(404),
+        ]
 
         task = ApplyPriorityTestSubscriptionsTask(
             "apply_priority_test_subscriptions", _PRIORITY_PARAMS
@@ -265,6 +277,57 @@ async def test_priority_subscriptions_cleanup_noop_when_no_state() -> None:
 
     api.delete_namespaced_custom_object.assert_not_called()
     api.replace_namespaced_custom_object.assert_not_called()
+
+
+async def test_wait_for_subscription_ready_returns_immediately_when_phase_set() -> None:
+    with patch("harness.tasks.subscription.k8s_client.CustomObjectsApi") as mock_cls:
+        api = MagicMock()
+        mock_cls.return_value = api
+        api.get_namespaced_custom_object.return_value = {"status": {"phase": "Active"}}
+
+        await _wait_for_subscription_ready(api, "test-sub", "ns", max_wait_s=30.0, log_prefix="test")
+
+    api.get_namespaced_custom_object.assert_called_once()
+
+
+async def test_wait_for_subscription_ready_polls_until_phase_appears() -> None:
+    """The real bug this closes: MaaS accepts a just-created MaaSSubscription
+    immediately, but the controller reconciles it asynchronously — a
+    provision_api_key call right after creation can lose that race and get
+    back 400 subscription_not_ready ("no status.phase set"). Confirmed live."""
+    with (
+        patch("harness.tasks.subscription.k8s_client.CustomObjectsApi") as mock_cls,
+        patch("harness.tasks.subscription.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+    ):
+        api = MagicMock()
+        mock_cls.return_value = api
+        api.get_namespaced_custom_object.side_effect = [
+            {"status": {}},
+            {"status": {}},
+            {"status": {"phase": "Active"}},
+        ]
+
+        await _wait_for_subscription_ready(api, "test-sub", "ns", max_wait_s=30.0, log_prefix="test")
+
+    assert api.get_namespaced_custom_object.call_count == 3
+    assert mock_sleep.call_count == 2
+
+
+async def test_wait_for_subscription_ready_gives_up_honestly_after_timeout() -> None:
+    """Never becoming ready must not hang forever or raise — the next task
+    (e.g. provision_api_key) surfaces the real error if it's still not ready."""
+    with (
+        patch("harness.tasks.subscription.k8s_client.CustomObjectsApi") as mock_cls,
+        patch("harness.tasks.subscription.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+    ):
+        api = MagicMock()
+        mock_cls.return_value = api
+        api.get_namespaced_custom_object.return_value = {"status": {}}
+
+        await _wait_for_subscription_ready(api, "test-sub", "ns", max_wait_s=0.0, log_prefix="test")
+
+    api.get_namespaced_custom_object.assert_called_once()
+    mock_sleep.assert_not_called()
 
 
 async def test_priority_subscriptions_cleanup_continues_after_one_failure() -> None:

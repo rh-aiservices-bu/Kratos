@@ -1,3 +1,4 @@
+import asyncio
 import time
 import traceback
 
@@ -33,6 +34,43 @@ _DEFAULT_TOKEN_WINDOW = "1s"
 # the one group virtually guaranteed to actually match the harness's own
 # identity without needing cluster-specific group names as a scenario input.
 _DEFAULT_OWNER_GROUPS = ["system:authenticated"]
+
+# Confirmed live: a MaaSSubscription just created/patched via the K8s API is
+# accepted immediately, but the MaaS controller reconciles it asynchronously —
+# calling POST /maas-api/v1/api-keys with `subscription` pinned to it right
+# after creation can lose that race and get back
+# `400 {"code":"subscription_not_ready","error":"subscription is unreconciled
+# (no status.phase set)"}`. Poll for a non-empty status.phase before moving
+# on, rather than assuming the create/patch call being accepted means the
+# subscription is actually usable yet.
+_DEFAULT_READY_MAX_WAIT_S = 30.0
+_READY_POLL_INTERVAL_S = 2.0
+
+
+async def _wait_for_subscription_ready(
+    api: k8s_client.CustomObjectsApi,
+    sub_name: str,
+    namespace: str,
+    max_wait_s: float,
+    log_prefix: str,
+) -> None:
+    start = time.monotonic()
+    while True:
+        obj = _get_existing_subscription(api, sub_name, namespace)
+        phase = (obj or {}).get("status", {}).get("phase")
+        if phase:
+            print(f"[{log_prefix}] {sub_name} reconciled, status.phase={phase!r}", flush=True)
+            return
+        elapsed = time.monotonic() - start
+        if elapsed >= max_wait_s:
+            print(
+                f"[{log_prefix}] {sub_name} still unreconciled after {max_wait_s}s "
+                "(no status.phase) — proceeding anyway; the next task will surface "
+                "the real error if it's still not ready",
+                flush=True,
+            )
+            return
+        await asyncio.sleep(_READY_POLL_INTERVAL_S)
 
 
 def _subscription_body(
@@ -123,6 +161,7 @@ class ApplyRateLimitSubscriptionTask(Task):
         priority = int(self.params.get("priority", _DEFAULT_PRIORITY))
         owner_groups = self.params.get("owner_groups") or _DEFAULT_OWNER_GROUPS
         owner_users = self.params.get("owner_users") or []
+        ready_max_wait_s = float(self.params.get("ready_max_wait_s", _DEFAULT_READY_MAX_WAIT_S))
 
         api = k8s_client.CustomObjectsApi()
         existing = _get_existing_subscription(api, sub_name, namespace)
@@ -138,6 +177,9 @@ class ApplyRateLimitSubscriptionTask(Task):
             f"[apply_rate_limit_subscription] {'created' if existing is None else 'patched'} "
             f"{sub_name} token_limit={token_limit}/{token_window} for {model_namespace}/{model_name}",
             flush=True,
+        )
+        await _wait_for_subscription_ready(
+            api, sub_name, namespace, ready_max_wait_s, "apply_rate_limit_subscription"
         )
 
         ctx.shared_state["subscription_name"] = sub_name
@@ -197,6 +239,7 @@ class ApplyPriorityTestSubscriptionsTask(Task):
         model_namespace = str(self.params["model_namespace"])
         owner_groups = self.params.get("owner_groups") or _DEFAULT_OWNER_GROUPS
         owner_users = self.params.get("owner_users") or []
+        ready_max_wait_s = float(self.params.get("ready_max_wait_s", _DEFAULT_READY_MAX_WAIT_S))
         specs = self.params["subscriptions"]
 
         api = k8s_client.CustomObjectsApi()
@@ -218,6 +261,9 @@ class ApplyPriorityTestSubscriptionsTask(Task):
                 f"{'created' if existing is None else 'patched'} {sub_name} "
                 f"priority={priority} token_limit={token_limit}/{token_window}",
                 flush=True,
+            )
+            await _wait_for_subscription_ready(
+                api, sub_name, namespace, ready_max_wait_s, "apply_priority_test_subscriptions"
             )
             records.append(
                 {
