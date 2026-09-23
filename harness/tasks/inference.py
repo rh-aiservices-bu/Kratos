@@ -48,17 +48,20 @@ class SendRequestsTask(Task):
         prompt = str(self.params.get("prompt", "Hello"))
 
         url, model, token = await self._resolve_url_model_and_token(ctx)
-        key_pool = self._resolve_key_pool(ctx)
+        key_pool_entries = self._resolve_key_pool_entries(ctx)
 
-        if key_pool:
-            clients = [AsyncOpenAI(api_key=k, base_url=url) for k in key_pool]
+        if key_pool_entries:
+            key_strings = [e["key"] for e in key_pool_entries]
+            key_models = [e.get("target_model") for e in key_pool_entries]
+            clients = [AsyncOpenAI(api_key=k, base_url=url) for k in key_strings]
             print(
                 f"[send_requests] base_url={url} model={model} "
-                f"keys=[{', '.join(_redact(k) for k in key_pool)}] "
+                f"keys=[{', '.join(_redact(k) for k in key_strings)}] "
                 f"count={count} concurrency={concurrency}",
                 flush=True,
             )
         else:
+            key_models = []
             clients = [AsyncOpenAI(api_key=token, base_url=url)]
             print(
                 f"[send_requests] base_url={url} model={model} "
@@ -84,9 +87,10 @@ class SendRequestsTask(Task):
             nonlocal total_tokens_sent, prompt_tokens_sent, completion_tokens_sent
             async with sem:
                 t0 = time.monotonic()
+                effective_model = (key_models[client_idx] if key_models else None) or model
                 try:
                     response = await clients[client_idx].chat.completions.create(
-                        model=model,
+                        model=effective_model,
                         messages=[{"role": "user", "content": prompt}],
                     )
                     success += 1
@@ -137,8 +141,8 @@ class SendRequestsTask(Task):
                     last_emit = now
                     await ctx.emit_assertion_state()
 
-        if key_pool:
-            assignments = _distribute(count, len(key_pool))
+        if key_pool_entries:
+            assignments = _distribute(count, len(key_pool_entries))
             request_tasks = []
             for key_idx, n_reqs in enumerate(assignments):
                 for _ in range(n_reqs):
@@ -238,10 +242,10 @@ class SendRequestsTask(Task):
         )
         return fallback, want
 
-    def _resolve_key_pool(self, ctx: TaskContext) -> list[str]:
+    def _resolve_key_pool_entries(self, ctx: TaskContext) -> list[dict]:
         if not self.params.get("key_pool"):
             return []
-        return [k["key"] for k in ctx.shared_state.get("api_keys", [])]
+        return list(ctx.shared_state.get("api_keys", []))
 
     async def cleanup(self, ctx: TaskContext) -> None:
         pass

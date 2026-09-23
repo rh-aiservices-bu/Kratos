@@ -183,6 +183,12 @@ class DeploySimulatedModelTask(Task):
         gateway_namespace = str(self.params.get("gateway_namespace", _DEFAULT_GATEWAY_NAMESPACE))
         ready_max_wait_s = float(self.params.get("ready_max_wait_s", _DEFAULT_READY_MAX_WAIT_S))
 
+        parallel_param = self.params.get("parallel", True)
+        if isinstance(parallel_param, str):
+            parallel = parallel_param.lower() not in ("false", "0", "no")
+        else:
+            parallel = bool(parallel_param)
+
         deployed = ctx.shared_state.setdefault("deployed_models", [])
         ready_count = 0
 
@@ -250,7 +256,12 @@ class DeploySimulatedModelTask(Task):
             await ctx.emit_assertion_state()
             return {"name": isvc_name, "namespace": namespace, "isvc_created": not isvc_existed, "ref_created": not ref_existed, "ready": ref_ready}
 
-        results = await asyncio.gather(*[_deploy_one(i) for i in range(count)])
+        if parallel:
+            results = await asyncio.gather(*[_deploy_one(i) for i in range(count)])
+        else:
+            results = []
+            for i in range(count):
+                results.append(await _deploy_one(i))
         deployed.extend(results)
 
         not_ready = [r["name"] for r in results if not r["ready"]]

@@ -11,6 +11,7 @@ config:
   max_models_per_subscription: 0   # 0 = no cap
   token_limit: 1000000
   model_ready_timeout: 120         # seconds to wait for each model to become Ready
+  deploy_parallel: true            # true = deploy all models concurrently; false = one at a time
   api_key_count: 12
   request_count: 60
   concurrency: 10
@@ -22,6 +23,7 @@ tasks:
       name_prefix: "${config.model_name_prefix}"
       namespace: "${config.model_namespace}"
       ready_max_wait_s: "${config.model_ready_timeout}"
+      parallel: "${config.deploy_parallel}"
   - name: provision_subscriptions_distributed
     params:
       subscription_count: "${config.subscription_count}"

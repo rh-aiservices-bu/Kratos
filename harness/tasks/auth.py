@@ -317,15 +317,17 @@ class ProvisionKeysDistributedTask(Task):
                         f"name={data.get('name')} subscription={sub_name}",
                         flush=True,
                     )
-                    ctx.shared_state.setdefault("api_keys", []).append(
-                        {
-                            "id": data["id"],
-                            "key": data["key"],
-                            "name": data.get("name"),
-                            "subscription": data.get("subscription"),
-                            "expiresAt": data.get("expiresAt"),
-                        }
-                    )
+                    model_refs = sub.get("model_refs", [])
+                    key_record: dict = {
+                        "id": data["id"],
+                        "key": data["key"],
+                        "name": data.get("name"),
+                        "subscription": data.get("subscription"),
+                        "expiresAt": data.get("expiresAt"),
+                    }
+                    if model_refs:
+                        key_record["target_model"] = model_refs[0]["name"]
+                    ctx.shared_state.setdefault("api_keys", []).append(key_record)
 
                     checks["total_keys"] += 1
                     if data.get("name") == name_i:
