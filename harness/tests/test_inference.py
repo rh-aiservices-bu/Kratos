@@ -289,6 +289,90 @@ async def test_key_pool_distribution_with_remainder() -> None:
     assert calls_by_key.get("sk-key-2") == 3
 
 
+async def test_key_index_selects_single_key_from_pool() -> None:
+    """ADR-023: key_index targets exactly one dynamically-created key —
+    bypassing key_pool's whole-pool distribution — so a scenario can run
+    one user's key at a time (e.g. two sequential bursts to compare)."""
+    with patch("harness.tasks.inference.AsyncOpenAI") as mock_cls:
+        mock_cls.return_value = _mock_client()
+
+        ctx = _make_ctx(
+            {
+                "api_keys": [
+                    {"id": "id-1", "key": "sk-key-1"},
+                    {"id": "id-2", "key": "sk-key-2"},
+                ]
+            }
+        )
+        task = SendRequestsTask(
+            "send_requests",
+            {"count": "1", "url": "http://m.test", "key_index": 1},
+        )
+        await task.run(ctx)
+
+    mock_cls.assert_called_with(api_key="sk-key-2", base_url="http://m.test")
+
+
+async def test_key_index_overrides_static_token_param() -> None:
+    with patch("harness.tasks.inference.AsyncOpenAI") as mock_cls:
+        mock_cls.return_value = _mock_client()
+
+        ctx = _make_ctx({"api_keys": [{"id": "id-1", "key": "sk-from-pool"}]})
+        task = SendRequestsTask(
+            "send_requests",
+            {"count": "1", "url": "http://m.test", "token": "sk-static", "key_index": 0},
+        )
+        await task.run(ctx)
+
+    mock_cls.assert_called_with(api_key="sk-from-pool", base_url="http://m.test")
+
+
+async def test_result_key_writes_to_custom_shared_state_key() -> None:
+    with patch("harness.tasks.inference.AsyncOpenAI") as mock_cls:
+        mock_cls.return_value = _mock_client()
+
+        task = SendRequestsTask(
+            "send_requests",
+            {"count": "2", "url": "http://m.test", "token": "sk-t", "result_key": "inference_results_user_a"},
+        )
+        ctx = _make_ctx()
+        await task.run(ctx)
+
+    assert "inference_results" not in ctx.shared_state
+    assert ctx.shared_state["inference_results_user_a"]["total_requests"] == 2
+
+
+async def test_two_invocations_with_distinct_result_keys_coexist() -> None:
+    """Mirrors the real scenario shape: two sequential send_requests-family
+    task runs, each keyed to a different user, must not clobber each other's
+    results — the fixed "inference_results" key would (ADR-019/ADR-023)."""
+    with patch("harness.tasks.inference.AsyncOpenAI") as mock_cls:
+        mock_cls.return_value = _mock_client()
+
+        ctx = _make_ctx(
+            {
+                "api_keys": [
+                    {"id": "id-1", "key": "sk-user-a"},
+                    {"id": "id-2", "key": "sk-user-b"},
+                ]
+            }
+        )
+        task_a = SendRequestsTask(
+            "send_requests",
+            {"count": "3", "url": "http://m.test", "key_index": 0, "result_key": "inference_results_user_a"},
+        )
+        await task_a.run(ctx)
+
+        task_b = SendRequestsTask(
+            "send_requests_as_second_user",
+            {"count": "5", "url": "http://m.test", "key_index": 1, "result_key": "inference_results_user_b"},
+        )
+        await task_b.run(ctx)
+
+    assert ctx.shared_state["inference_results_user_a"]["total_requests"] == 3
+    assert ctx.shared_state["inference_results_user_b"]["total_requests"] == 5
+
+
 async def test_url_resolution_explicit_params_priority() -> None:
     """Explicit params override shared_state for url/token."""
     with patch("harness.tasks.inference.AsyncOpenAI") as mock_cls:

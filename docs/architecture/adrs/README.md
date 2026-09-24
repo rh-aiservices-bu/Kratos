@@ -36,3 +36,4 @@ Each ADR follows the [Michael Nygard format](https://cognitect.com/blog/2011/11/
 | [ADR-020](ADR-020-scenario-categories.md) | Scenario Categories in the UI | Accepted |
 | [ADR-021](ADR-021-rate-limit-priority-precedence.md) | Rate-Limit Priority Precedence via Auto-Selection, Not Live Arbitration | Accepted |
 | [ADR-022](ADR-022-platform-health-checks.md) | Read-Only Platform Health Checks | Accepted |
+| [ADR-023](ADR-023-multi-user-rate-limit-sharing.md) | Multi-User Rate-Limit Sharing via ServiceAccount-Minted Identities | Accepted |

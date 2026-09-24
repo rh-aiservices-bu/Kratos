@@ -178,8 +178,19 @@ class ApplyRateLimitSubscriptionTask(Task):
         token_limit = int(self.params.get("token_limit", 10))
         token_window = str(self.params.get("token_window") or _DEFAULT_TOKEN_WINDOW)
         priority = int(self.params.get("priority", _DEFAULT_PRIORITY))
-        owner_groups = self.params.get("owner_groups") or _DEFAULT_OWNER_GROUPS
+        # Two-arg .get(), not `or` — an explicit owner_groups: [] must stick
+        # (e.g. to keep a test subscription's blast radius narrower than
+        # system:authenticated, ADR-023); `[] or X` would silently discard it.
+        owner_groups = self.params.get("owner_groups", _DEFAULT_OWNER_GROUPS)
         owner_users = self.params.get("owner_users") or []
+        # ADR-023: lets a scenario bind owner.users to identities minted at
+        # runtime by create_user (harness/tasks/identity.py) — task params
+        # can't use ${harness.x} substitution (that's assertion-only, see
+        # harness/runner.py), so this reads shared_state directly instead.
+        owner_users_from_shared_state = self.params.get("owner_users_from_shared_state")
+        if owner_users_from_shared_state:
+            identities = ctx.shared_state.get(owner_users_from_shared_state, [])
+            owner_users = owner_users + [u["username"] for u in identities]
         ready_max_wait_s = float(self.params.get("ready_max_wait_s", _DEFAULT_READY_MAX_WAIT_S))
 
         api = k8s_client.CustomObjectsApi()
@@ -256,7 +267,7 @@ class ApplyPriorityTestSubscriptionsTask(Task):
         namespace = str(self.params["namespace"])
         model_name = str(self.params["model_name"])
         model_namespace = str(self.params["model_namespace"])
-        owner_groups = self.params.get("owner_groups") or _DEFAULT_OWNER_GROUPS
+        owner_groups = self.params.get("owner_groups", _DEFAULT_OWNER_GROUPS)
         owner_users = self.params.get("owner_users") or []
         ready_max_wait_s = float(self.params.get("ready_max_wait_s", _DEFAULT_READY_MAX_WAIT_S))
         specs = self.params["subscriptions"]
@@ -379,7 +390,7 @@ class ProvisionSubscriptionsDistributedTask(Task):
         token_limit = int(self.params.get("token_limit", 1000000))
         token_window = str(self.params.get("token_window") or _DEFAULT_TOKEN_WINDOW)
         priority = int(self.params.get("priority", _DEFAULT_PRIORITY))
-        owner_groups = self.params.get("owner_groups") or _DEFAULT_OWNER_GROUPS
+        owner_groups = self.params.get("owner_groups", _DEFAULT_OWNER_GROUPS)
         owner_users = self.params.get("owner_users") or []
         ready_max_wait_s = float(self.params.get("ready_max_wait_s", _DEFAULT_READY_MAX_WAIT_S))
 

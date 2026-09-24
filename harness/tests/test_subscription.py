@@ -185,6 +185,104 @@ async def test_non_404_api_exception_propagates() -> None:
             await task.run(_make_ctx())
 
 
+async def test_owner_groups_explicit_empty_list_sticks() -> None:
+    """Regression test (ADR-023): `owner_groups: []` must not silently fall
+    back to _DEFAULT_OWNER_GROUPS — `self.params.get("owner_groups") or
+    _DEFAULT_OWNER_GROUPS` used to discard an explicit empty list because
+    `[] or X` evaluates to X."""
+    with patch("harness.tasks.subscription.k8s_client.CustomObjectsApi") as mock_cls:
+        api = MagicMock()
+        mock_cls.return_value = api
+        api.get_namespaced_custom_object.side_effect = _api_exc(404)
+
+        task = ApplyRateLimitSubscriptionTask(
+            "apply_rate_limit_subscription", {**_PARAMS, "owner_groups": []}
+        )
+        await task.run(_make_ctx())
+
+    body = _body_from(api.create_namespaced_custom_object)
+    assert body["spec"]["owner"]["groups"] == []
+
+
+async def test_owner_groups_absent_still_defaults() -> None:
+    with patch("harness.tasks.subscription.k8s_client.CustomObjectsApi") as mock_cls:
+        api = MagicMock()
+        mock_cls.return_value = api
+        api.get_namespaced_custom_object.side_effect = _api_exc(404)
+
+        task = ApplyRateLimitSubscriptionTask("apply_rate_limit_subscription", _PARAMS)
+        await task.run(_make_ctx())
+
+    body = _body_from(api.create_namespaced_custom_object)
+    assert body["spec"]["owner"]["groups"] == [{"name": "system:authenticated"}]
+
+
+async def test_owner_users_from_shared_state_appends_minted_identities() -> None:
+    """ADR-023: lets a subscription bind owner.users to identities minted at
+    runtime by create_user — task params can't reference shared_state via
+    YAML templating, so this reads it directly."""
+    with patch("harness.tasks.subscription.k8s_client.CustomObjectsApi") as mock_cls:
+        api = MagicMock()
+        mock_cls.return_value = api
+        api.get_namespaced_custom_object.side_effect = _api_exc(404)
+
+        task = ApplyRateLimitSubscriptionTask(
+            "apply_rate_limit_subscription",
+            {**_PARAMS, "owner_groups": [], "owner_users_from_shared_state": "users"},
+        )
+        ctx = _make_ctx(
+            {
+                "users": [
+                    {"name": "u1", "namespace": "maaspal", "username": "system:serviceaccount:maaspal:u1", "token": "t1"},
+                    {"name": "u2", "namespace": "maaspal", "username": "system:serviceaccount:maaspal:u2", "token": "t2"},
+                ]
+            }
+        )
+        await task.run(ctx)
+
+    body = _body_from(api.create_namespaced_custom_object)
+    assert body["spec"]["owner"]["users"] == [
+        "system:serviceaccount:maaspal:u1",
+        "system:serviceaccount:maaspal:u2",
+    ]
+
+
+async def test_owner_users_from_shared_state_combines_with_explicit_owner_users() -> None:
+    with patch("harness.tasks.subscription.k8s_client.CustomObjectsApi") as mock_cls:
+        api = MagicMock()
+        mock_cls.return_value = api
+        api.get_namespaced_custom_object.side_effect = _api_exc(404)
+
+        task = ApplyRateLimitSubscriptionTask(
+            "apply_rate_limit_subscription",
+            {
+                **_PARAMS,
+                "owner_users": ["static-user"],
+                "owner_users_from_shared_state": "users",
+            },
+        )
+        ctx = _make_ctx(
+            {"users": [{"name": "u1", "namespace": "maaspal", "username": "minted-user", "token": "t1"}]}
+        )
+        await task.run(ctx)
+
+    body = _body_from(api.create_namespaced_custom_object)
+    assert body["spec"]["owner"]["users"] == ["static-user", "minted-user"]
+
+
+async def test_owner_users_from_shared_state_absent_is_noop() -> None:
+    with patch("harness.tasks.subscription.k8s_client.CustomObjectsApi") as mock_cls:
+        api = MagicMock()
+        mock_cls.return_value = api
+        api.get_namespaced_custom_object.side_effect = _api_exc(404)
+
+        task = ApplyRateLimitSubscriptionTask("apply_rate_limit_subscription", _PARAMS)
+        await task.run(_make_ctx())
+
+    body = _body_from(api.create_namespaced_custom_object)
+    assert body["spec"]["owner"]["users"] == []
+
+
 async def test_missing_required_param_raises() -> None:
     task = ApplyRateLimitSubscriptionTask(
         "apply_rate_limit_subscription", {"subscription_name": "test-sub"}

@@ -46,6 +46,18 @@ class SendRequestsTask(Task):
         count = int(self.params.get("count", 10))
         concurrency = int(self.params.get("concurrency", 5))
         prompt = str(self.params.get("prompt", "Hello"))
+        result_key = str(self.params.get("result_key", "inference_results"))
+
+        key_index = self.params.get("key_index")
+        if key_index is not None:
+            # Targets exactly one key out of several dynamically-created
+            # ones (e.g. one per user from create_user/provision_keys_for_
+            # users, ADR-023) — something neither key_pool (uses the whole
+            # pool) nor a static params.token (YAML-only, can't reference
+            # shared_state) can do. Injecting into params["token"] reuses
+            # the existing single-key resolution chain unchanged.
+            api_keys = ctx.shared_state.get("api_keys", [])
+            self.params["token"] = api_keys[int(key_index)]["key"]
 
         url, model, token = await self._resolve_url_model_and_token(ctx)
         key_pool_entries = self._resolve_key_pool_entries(ctx)
@@ -121,7 +133,7 @@ class SendRequestsTask(Task):
                 latencies.append((time.monotonic() - t0) * 1000)
                 total = success + fail
                 elapsed = time.monotonic() - run_start
-                ctx.shared_state["inference_results"] = {
+                ctx.shared_state[result_key] = {
                     "total_requests": total,
                     "success_count": success,
                     "fail_count": fail,
@@ -261,3 +273,9 @@ REGISTRY["send_requests"] = SendRequestsTask
 # ui/src/components/TaskProgress.tsx uses task.name as the React list key —
 # so this needs its own registry entry, not just a repeated YAML task name.
 REGISTRY["verify_revoked_key_denied"] = SendRequestsTask
+# Same alias trick, same reason (ADR-019), new use (ADR-023):
+# scenarios/rate_limit_shared_across_users.yaml needs a second, differently-
+# labeled "send some requests" step (targeting a second user's key via
+# key_index) so the two bursts get distinct UI task-pipeline/progress chips
+# instead of colliding on the shared "send_requests" task name.
+REGISTRY["send_requests_as_second_user"] = SendRequestsTask
