@@ -6,10 +6,16 @@ config:
   concurrency: 10
   prompt: "Hello, world!"
   metrics_tolerance_pct: 5
+  subscription: ""           # optional — leave blank for auto-selection
   # Max wait for a fresh Prometheus scrape before settling maas_*_match (ADR-014).
   metrics_max_wait_s: 65
   # Limitador's gateway counters are scoped by the target model's HTTPRoute name (ADR-014).
   limitador_namespace: "llm/facebook-opt-125m-simulated-kserve-route"
+  # The MaaSModelRef this scenario's metrics_queries/limitador_namespace above are scoped
+  # to — must stay in sync with limitador_namespace. Passed to send_requests below so
+  # discovery can't silently fall through to an unrelated model (see that task's params).
+  target_model_namespace: "llm"
+  target_model_name: "facebook-opt-125m-simulated"
 # Named PromQL queries (ADR-015), baseline-snapshotted before the task loop and
 # re-polled every 5s. Referenced below via ${baseline.<name>}.
 metrics_queries:
@@ -19,8 +25,17 @@ tasks:
   - name: provision_api_key
     params:
       key_name: "maaspal-metrics-key"
+      subscription: "${config.subscription}"
   - name: send_requests
     params:
+      # Confirmed live: /v1/models can return more than one model (an unrelated
+      # ExternalModel silently hijacked this scenario once by sorting first in
+      # the discovery response) — always pin the exact model this scenario's
+      # metrics_queries/limitador_namespace target, don't rely on
+      # DEFAULT_MODEL/first-available. Matches m['owned_by'] ("<namespace>/
+      # <name>"), the one discovery field that's a reliable match regardless
+      # of id/displayName formatting. Same fix as rate_limit_validation.yaml.
+      model: "${config.target_model_namespace}/${config.target_model_name}"
       count: "${config.request_count}"
       concurrency: "${config.concurrency}"
       prompt: "${config.prompt}"
