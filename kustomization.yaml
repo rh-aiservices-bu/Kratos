@@ -26,6 +26,7 @@ configMapGenerator:
       - scenarios/multi_key_load.yaml
       - scenarios/direct_inference.yaml
       - scenarios/rate_limit_validation.yaml
+      - scenarios/rate_limit_validation_existing_subscription.yaml
       - scenarios/metrics_fill.yaml
       - scenarios/access_denied_no_policy.yaml
       - scenarios/api_key_lifecycle.yaml

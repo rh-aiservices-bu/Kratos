@@ -32,9 +32,9 @@ _KNOWN_CATEGORIES = {
 }
 
 
-def test_exactly_twelve_production_scenarios() -> None:
-    assert len(_SCENARIO_PATHS) == 12, (
-        f"Expected 12 scenario files, found {len(_SCENARIO_PATHS)}: "
+def test_exactly_thirteen_production_scenarios() -> None:
+    assert len(_SCENARIO_PATHS) == 13, (
+        f"Expected 13 scenario files, found {len(_SCENARIO_PATHS)}: "
         f"{[p.name for p in _SCENARIO_PATHS]}"
     )
 

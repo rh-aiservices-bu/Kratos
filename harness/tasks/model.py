@@ -164,8 +164,11 @@ async def _wait_for_model_ref_runtime_ready(
 class DeploySimulatedModelTask(Task):
     """Creates LLMInferenceService CRs using the llm-d inference simulator
     image. Each instance gets a unique name and model name so MaaS treats
-    them as distinct models. The controller auto-creates MaaSModelRef,
-    HTTPRoute, and the backing Deployment.
+    them as distinct models, and the name is namespaced by run_id so
+    concurrent/back-to-back runs (including different scenarios that share
+    the same name_prefix/namespace defaults) never collide on the same CR.
+    The controller auto-creates MaaSModelRef, HTTPRoute, and the backing
+    Deployment.
 
     Stores each deployed model's name and namespace in
     shared_state["deployed_models"] for downstream tasks
@@ -194,9 +197,14 @@ class DeploySimulatedModelTask(Task):
 
         async def _deploy_one(i: int) -> dict:
             nonlocal ready_count
-            isvc_name = f"{name_prefix}-{i + 1}"
+            # run_id is baked into the name (matching the ctx.run_id[:8]
+            # convention used for API key names in auth.py) so this run's CRs
+            # never collide with another run's — otherwise two scenarios that
+            # both default to name_prefix="maaspal-sim" would silently patch
+            # and then cross-delete each other's LLMInferenceService/MaaSModelRef.
+            isvc_name = f"{name_prefix}-{ctx.run_id[:8]}-{i + 1}"
             # Use the service name as the model name so each instance gets a
-            # distinct MaaS model alias (e.g. maaspal-sim-1, maaspal-sim-2).
+            # distinct MaaS model alias (e.g. maaspal-sim-a1b2c3d4-1).
             model_name = isvc_name
             api = k8s_client.CustomObjectsApi()
 
